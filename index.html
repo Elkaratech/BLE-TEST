@@ -93,6 +93,7 @@
         <button class="grow" id="stop" disabled>Stop</button>
       </div>
       <p class="muted" id="scanInfo" style="margin:10px 0 0">Not scanning.</p>
+      <p class="muted" id="pktInfo" style="margin:6px 0 0" role="status"></p>
       <p class="muted" id="help" style="margin:6px 0 0"></p>
       <div class="row" style="margin-top:8px">
         <button id="pick" class="grow">Backup: pick a device</button>
@@ -171,6 +172,12 @@
       <h2>This phone</h2>
       <div class="row" id="status"></div>
     </section>
+    <section class="card" aria-label="Diagnostics">
+      <h2>Diagnostics</h2>
+      <p class="muted" style="margin-top:0">If nothing appears, copy this and send it to the developer.</p>
+      <pre id="diag" class="mono" style="white-space:pre-wrap;margin:0 0 10px"></pre>
+      <button id="copyDiag" class="small">Copy diagnostics</button>
+    </section>
     <section class="card tint">
       <h2>Set up Chrome (once)</h2>
       <ol>
@@ -214,12 +221,35 @@ const $ = (id) => document.getElementById(id);
 const bt = navigator.bluetooth;
 const state = {
   beacons: new Map(), tracked: null, userUntracked: false, pickers: [], pickAbort: null,
-  scan: null, demoTimer: null, scanning: false,
+  scan: null, demoTimer: null, scanning: false, packets: 0, lastPacket: null, scanStart: 0, avail: "checking…",
   rec: null, results: [], wake: null, view: "live",
   place: "in hand", secs: 30, spot: "",
 };
 const WINDOW_MS = 10_000, KEEP_MS = 5 * 60_000;
 const SPOTS = ["1 m", "2 m", "3 m", "5 m", "8 m", "12 m", "Door", "Corridor", "Far corner"];
+
+/* ---------- diagnostics ---------- */
+const logs = [];
+function log(m) { logs.push(new Date().toLocaleTimeString("en-IN") + "  " + m); if (logs.length > 60) logs.shift(); renderDiag(); }
+function renderDiag() {
+  const hasWatch = typeof BluetoothDevice !== "undefined" && "watchAdvertisements" in BluetoothDevice.prototype;
+  const lines = [
+    "page: " + location.href.split("?")[0],
+    "browser: " + navigator.userAgent,
+    "secure page: " + window.isSecureContext,
+    "navigator.bluetooth: " + !!bt,
+    "requestLEScan (Start scan): " + !!(bt && bt.requestLEScan),
+    "watchAdvertisements (Backup): " + hasWatch,
+    "Bluetooth available: " + state.avail,
+    "packets received: " + state.packets + (state.lastPacket ? " (last " + Math.round((Date.now() - state.lastPacket) / 1000) + " s ago)" : ""),
+    "scanning: " + state.scanning,
+    "--- log ---", ...logs,
+  ];
+  const d = document.getElementById("diag"); if (d) d.textContent = lines.join("\n");
+  return lines.join("\n");
+}
+if (bt && bt.getAvailability) bt.getAvailability().then((v) => { state.avail = String(v); renderDiag(); }).catch((e) => { state.avail = "error " + (e && e.name); renderDiag(); });
+else state.avail = "unknown";
 
 /* ---------- helpers ---------- */
 const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -251,12 +281,13 @@ document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click
 
 /* ---------- status ---------- */
 function renderStatus() {
-  const items = [["Secure page (https)", window.isSecureContext], ["Bluetooth API", !!bt], ["Scan feature", !!(bt && bt.requestLEScan)], ["Backup device picker", !!bt], ["Keep-awake", "wakeLock" in navigator]];
+  const items = [["Secure page (https)", window.isSecureContext], ["Bluetooth API", !!bt], ["Scan feature", !!(bt && bt.requestLEScan)], ["Backup (watch device)", typeof BluetoothDevice !== "undefined" && "watchAdvertisements" in BluetoothDevice.prototype], ["Keep-awake", "wakeLock" in navigator]];
   const box = $("status"); box.textContent = "";
   for (const [name, ok] of items) box.appendChild(el("span", "chip " + (ok ? "ok" : "bad"), (ok ? "✓ " : "✗ ") + name));
   const help = $("help");
   if (!window.isSecureContext) help.textContent = "This page is not secure. Open it from its https link.";
   else if (!bt) help.textContent = "This browser has no Bluetooth API. Use Chrome on Android.";
+  else if (!bt.requestLEScan && !(typeof BluetoothDevice !== "undefined" && "watchAdvertisements" in BluetoothDevice.prototype)) help.textContent = "This Chrome cannot read beacon signals yet. Enable the experimental flag (Setup tab) and relaunch Chrome. If this stays red, web pages cannot do it on this phone.";
   else if (!bt.requestLEScan) help.textContent = "Start scan is off. Use Backup: pick a device, or open Setup to enable the Chrome flag.";
   else help.textContent = "Ready. Location and Bluetooth must be on.";
   const mini = $("mini"); mini.textContent = "";
@@ -325,16 +356,19 @@ function describe(b) {
 async function acquireWake() {
   try { if ("wakeLock" in navigator && !state.wake) { state.wake = await navigator.wakeLock.request("screen"); state.wake.addEventListener("release", () => { state.wake = null; }); } } catch (_) {}
 }
-const onRealAdv = (e) => onAdv(parseAdv(e));
+const onRealAdv = (e) => { state.packets++; state.lastPacket = Date.now(); onAdv(parseAdv(e)); };
 async function startScan() {
   if (!bt || !bt.requestLEScan) return;
   try {
+    log("Start scan pressed: calling requestLEScan");
     state.scan = await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
     bt.addEventListener("advertisementreceived", onRealAdv);
-    state.scanning = true; acquireWake(); setScanUi();
-  } catch (err) { $("scanInfo").textContent = "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag."; }
+    state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
+    log("requestLEScan started, scan.active = " + state.scan.active);
+  } catch (err) { log("requestLEScan FAILED: " + (err && err.name) + " " + (err && err.message)); $("scanInfo").textContent = "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag."; }
 }
 function stopScan() {
+  log("Stop pressed");
   try { if (state.scan && state.scan.active) state.scan.stop(); } catch (_) {}
   if (bt) bt.removeEventListener("advertisementreceived", onRealAdv);
   clearInterval(state.demoTimer); state.demoTimer = null;
@@ -355,15 +389,24 @@ function setScanUi() {
 async function startPicker() {
   if (!bt) return;
   try {
+    log("Backup pressed: opening device chooser");
     const dev = await bt.requestDevice({ acceptAllDevices: true, optionalServices: [0xfeaa], optionalManufacturerData: [0x004c, 0x0ea5] });
+    log("device chosen: " + (dev.name || "(no name)") + " id " + String(dev.id).slice(0, 8));
+    if (typeof dev.watchAdvertisements !== "function") {
+      log("This Chrome has no watchAdvertisements, so it can list the device but cannot read its signal strength.");
+      $("scanInfo").textContent = "Chrome listed the device (" + (dev.name || "unnamed") + ") but cannot read its signal strength in this version. Enable the experimental flag in Setup and relaunch Chrome.";
+      return;
+    }
     if (!state.pickAbort) state.pickAbort = new AbortController();
     dev.addEventListener("advertisementreceived", onRealAdv);
     state.pickers.push(dev);
     await dev.watchAdvertisements({ signal: state.pickAbort.signal });
-    state.scanning = true; acquireWake(); setScanUi();
+    log("watchAdvertisements started, watching = " + dev.watchingAdvertisements);
+    state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
     $("scanInfo").textContent = "Reading " + (dev.name || "the chosen device") + ". Keep this page open and the screen on.";
   } catch (err) {
     const m = err && err.name === "NotFoundError" ? "No device was chosen. Move closer to the beacon and try again." : (err && err.message ? err.message : String(err));
+    log("Backup FAILED: " + (err && err.name) + " " + (err && err.message));
     $("scanInfo").textContent = "Backup scan: " + m;
   }
 }
@@ -385,6 +428,10 @@ $("demoDist").addEventListener("input", () => { $("demoDistVal").textContent = $
 function windowStats(b) { const now = Date.now(); return stats(b.samples.filter((s) => now - s.t <= WINDOW_MS).map((s) => s.v)); }
 function renderList() {
   prune();
+  if (state.scanning && !state.demoTimer) {
+    const quiet = state.packets === 0 && Date.now() - state.scanStart > 8000;
+    $("pktInfo").textContent = state.packets ? `Packets received: ${state.packets}` : (quiet ? "Scanning, but Chrome has delivered no packets after 8 seconds. See Setup → Diagnostics, and check Location and the Nearby devices permission." : "Scanning… waiting for the first packet.");
+  } else $("pktInfo").textContent = "";
   const filter = $("filter").value.trim().toLowerCase(), only = $("onlyBeacons").checked, now = Date.now();
   const all = [...state.beacons.values()];
   // Auto-track: if exactly one real beacon is around and the user has not chosen otherwise, track it.
@@ -538,6 +585,7 @@ $("share").addEventListener("click", async () => {
 $("clear").addEventListener("click", () => { if (confirm("Delete all results on this phone?")) { state.results = []; saveResults(); renderResults(); } });
 
 /* ---------- wiring ---------- */
+$("copyDiag").addEventListener("click", async () => { try { await navigator.clipboard.writeText(renderDiag()); $("copyDiag").textContent = "Copied"; setTimeout(() => { $("copyDiag").textContent = "Copy diagnostics"; }, 1500); } catch (_) { $("copyDiag").textContent = "Select the text above and copy it"; } });
 $("start").addEventListener("click", startScan);
 $("stop").addEventListener("click", stopScan);
 $("demo").addEventListener("click", startDemo);
@@ -547,7 +595,7 @@ $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
 
-loadResults(); buildSpots(); renderStatus(); renderResults(); setScanUi(); renderList();
+loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
 setInterval(renderList, 500);
 setInterval(tickRec, 200);
 </script>
