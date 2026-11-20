@@ -382,7 +382,7 @@ function onAdv(p) {
   if (p.raw.length) b.raw = p.raw.join(" | ");
   if (typeof p.rssi === "number") {
     b.rssi = p.rssi; b.last = now; b.count++;
-    if (state.scanning) { if (!b.s) b.s = { n: 0, first: null, last: null, sum: 0 }; b.s.n++; if (b.s.first === null) b.s.first = now; b.s.last = now; b.s.sum += p.rssi; }
+    if (state.scanning) { if (!b.s) b.s = { n: 0, first: null, last: null, sum: 0, v: [] }; b.s.v.push(p.rssi); b.s.n++; if (b.s.first === null) b.s.first = now; b.s.last = now; b.s.sum += p.rssi; }
     b.samples.push({ t: now, v: p.rssi });
     if (state.rec && state.rec.key === p.key) state.rec.samples.push({ t: now, v: p.rssi });
   }
@@ -405,11 +405,15 @@ function beginSession() { state.sessionStart = Date.now(); state.lastSummary = n
 function buildSummary() {
   const dur = Math.max(1, (Date.now() - state.sessionStart) / 1000);
   const all = [...state.beacons.values()];
-  const rows = all.filter((b) => b.kinds.size && b.s && b.s.n > 0).sort(fixedOrder).map((b) => ({
-    name: nameOf(b), ignored: state.ignored.has(b.key), n: b.s.n, perSec: b.s.n / dur,
-    gapMs: b.s.n > 1 ? (b.s.last - b.s.first) / (b.s.n - 1) : null, avgRssi: b.s.sum / b.s.n,
-  }));
-  return { dur, rows, other: all.filter((b) => !b.kinds.size && b.s).reduce((a, b) => a + b.s.n, 0), at: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+  const rows = all.filter((b) => b.kinds.size && b.s && b.s.n > 0).sort(fixedOrder).map((b) => {
+    const st = stats(b.s.v), avg = b.s.sum / b.s.n;
+    return {
+      name: nameOf(b), ignored: state.ignored.has(b.key), n: b.s.n, perSec: b.s.n / dur,
+      gapMs: b.s.n > 1 ? (b.s.last - b.s.first) / (b.s.n - 1) : null, avgRssi: avg,
+      dist: estDist(avg), distLo: st ? estDist(st.p90) : null, distHi: st ? estDist(st.p10) : null,   // near end = strong readings, far end = weak readings
+    };
+  });
+  return { dur, calibrated: !!cal.fitted, rows, other: all.filter((b) => !b.kinds.size && b.s).reduce((a, b) => a + b.s.n, 0), at: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
 }
 function fillSummary(box) {
   box.textContent = "";
@@ -424,7 +428,10 @@ function fillSummary(box) {
     const three = el("div", "three");
     for (const [v, l] of [[f1(r.perSec), "avg packets/s"], [r.gapMs === null ? "–" : f0(r.gapMs), "avg gap, ms"], [f0(r.avgRssi), "avg dBm"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l)); three.appendChild(d); }
     c.appendChild(three);
-    c.appendChild(el("div", "muted", `${r.n} packets received in total. Average frequency = packets ÷ scan time. The gap is the average time between packets while the beacon was heard.`));
+    const dthree = el("div", "three"); dthree.style.marginTop = "6px";
+    for (const [v, l] of [[fmtD(r.dist), "avg distance (est.)"], [fmtD(r.distLo) + " – " + fmtD(r.distHi), "likely range"], [m.calibrated ? "calibrated" : "rough guess", "estimate quality"]]) { const d = el("div"); const b = el("b", "", v); if (v.length > 9) b.style.fontSize = "1rem"; d.appendChild(b); d.appendChild(el("span", "", l)); dthree.appendChild(d); }
+    c.appendChild(dthree);
+    c.appendChild(el("div", "muted", `Average distance is worked out from the average signal (${f0(r.avgRssi)} dBm) with A = ${cal.a} dBm and n = ${cal.n}. ${r.n} packets received in total. Average frequency = packets ÷ scan time. The gap is the average time between packets while the beacon was heard.`));
     box.appendChild(c);
   }
   if (m.other) box.appendChild(el("p", "muted", `${m.other} packets came from other, non-beacon devices.`));
