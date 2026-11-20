@@ -497,7 +497,13 @@ async function startScan() {
     bt.addEventListener("advertisementreceived", onRealAdv);
     beginSession(); state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
     log("requestLEScan started, scan.active = " + state.scan.active);
-  } catch (err) { log("requestLEScan FAILED: " + (err && err.name) + " " + (err && err.message)); $("scanInfo").textContent = "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag."; }
+  } catch (err) {
+    log("requestLEScan FAILED: " + (err && err.name) + " " + (err && err.message));
+    const denied = err && (err.name === "NotAllowedError" || /block|denied|permission/i.test(String(err.message)));
+    $("scanInfo").textContent = denied
+      ? "Chrome blocked the Bluetooth scan permission for this page. Fix: tap the icon left of the web address (lock or sliders) → Permissions (or Site settings) → set Bluetooth scanning to Allow, or choose Reset permissions. Then reload this page, press Start scan, and tap Allow on Chrome's prompt."
+      : "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag.";
+  }
 }
 function stopScan() {
   log("Stop pressed");
