@@ -56,11 +56,26 @@
   /* result cards */
   .res { border:1.5px solid var(--line); border-radius:14px; padding:12px; display:grid; gap:6px; }
   .res .head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
-  .res .three { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; text-align:center; }
-  .res .three div { background:var(--secondary); border-radius:10px; padding:6px 2px; }
-  .res .three b { display:block; font-size:1.3rem; font-variant-numeric:tabular-nums; }
-  .res .three span { font-size:.72rem; color:var(--muted); }
+  .three { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; text-align:center; }
+  .three div { background:var(--secondary); border-radius:10px; padding:6px 2px; }
+  .three b { display:block; font-size:1.3rem; font-variant-numeric:tabular-nums; }
+  .three span { font-size:.72rem; color:var(--muted); }
   .x { min-height:40px; padding:0 12px; }
+  /* circle test */
+  .zone { border:1.5px solid var(--ink); border-radius:14px; padding:14px 10px; text-align:center; font-weight:800; font-size:1.25rem; background:#fff; line-height:1.25; }
+  .zone small { display:block; font-weight:600; font-size:.8rem; color:var(--muted); margin-top:2px; }
+  .zone.inside { background:var(--primary); }
+  .zone.inside small { color:var(--ink); }
+  .zone.approaching { background:var(--secondary); }
+  .zone.none { color:var(--danger); border-color:var(--danger); border-style:dashed; }
+  .tl { display:grid; grid-template-columns:repeat(15,minmax(0,1fr)); gap:3px; margin:8px 0 4px; }
+  .tl div { border:1.5px solid var(--ink); border-radius:6px; text-align:center; font-size:.58rem; line-height:1.15; padding:6px 0 4px; font-variant-numeric:tabular-nums; background:#fff; min-height:36px; }
+  .tl .inside { background:var(--primary); }
+  .tl .approaching { background:var(--secondary); }
+  .tl .none { border-style:dashed; color:var(--muted); }
+  .legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:.78rem; margin-bottom:6px; }
+  .legend i { display:inline-block; width:12px; height:12px; border:1.5px solid var(--ink); border-radius:3px; vertical-align:-2px; margin-right:4px; background:#fff; }
+  .legend i.inside { background:var(--primary); } .legend i.approaching { background:var(--secondary); } .legend i.none { border-style:dashed; }
   /* fixed bottom: record dock + tab bar */
   #dock { position:fixed; left:0; right:0; bottom:calc(var(--nav) + env(safe-area-inset-bottom)); z-index:6; background:var(--paper); border-top:1.5px solid var(--line); padding:8px 14px; }
   #dock .in { max-width:640px; margin:0 auto; display:flex; align-items:center; gap:12px; }
@@ -120,6 +135,25 @@
       <div class="kv" id="mKv"></div>
     </section>
 
+    <section class="card" id="circleCard" aria-label="Circle test">
+      <h2>Circle test</h2>
+      <p class="muted" style="margin-top:0">Put the tracked beacon at the centre and walk in from outside. <b>Approaching</b> starts at the outer ring, and <b>Inside</b> starts at the inner circle.</p>
+      <div class="zone none" id="zoneBanner" role="status">Track a beacon to start<small>Start the scan and tap Track on the centre beacon</small></div>
+      <div class="row" style="margin-top:10px">
+        <div class="grow"><label class="l" for="r1">Inner circle radius (m)</label><input id="r1" type="text" inputmode="decimal" autocomplete="off"></div>
+        <div class="grow"><label class="l" for="r2">Outer ring radius (m)</label><input id="r2" type="text" inputmode="decimal" autocomplete="off"></div>
+      </div>
+      <p class="muted" id="circThr" style="margin:8px 0"></p>
+      <div class="row">
+        <button id="edge1" class="small grow"></button>
+        <button id="edge2" class="small grow"></button>
+      </div>
+      <button class="primary" id="runCircle" style="width:100%;margin-top:10px" disabled>Run 15 s circle test</button>
+      <div class="bar" style="margin-top:10px" aria-hidden="true"><i id="circBar"></i></div>
+      <p class="muted" id="circMsg" role="status" style="margin:6px 0 0"></p>
+      <div id="circResult" style="margin-top:8px"></div>
+    </section>
+
     <section class="card" aria-label="Distance estimate settings">
       <details>
         <summary>Distance estimate settings</summary>
@@ -167,6 +201,7 @@
 
   <!-- ============ RESULTS ============ -->
   <div class="view" id="v-results" hidden>
+    <section class="card" id="circRes" hidden aria-label="Last circle test"></section>
     <section class="card tint" id="sumRes" hidden aria-label="Last scan summary"></section>
     <section class="card" aria-label="Results">
       <h2>Results</h2>
@@ -271,6 +306,17 @@ const pinRank = (b) => {
 };
 const fixedOrder = (a, b) => pinRank(a) - pinRank(b) || (a.name || "~").localeCompare(b.name || "~") || a.key.localeCompare(b.key);
 const SPOTS = ["1 m", "2 m", "3 m", "5 m", "8 m", "12 m", "Door", "Corridor", "Far corner"];
+
+/* ---------- circle test: inside / approaching / outside, from the tracked beacon's signal ---------- */
+const CIRC_KEY = "ble-test-circle-v1", DWELL_MS = 1500, SMOOTH_MS = 2000, TEST_MS = 15000;
+const circ = { r1: 10, r2: 12, t1: null, t2: null, zone: "none", pending: null, since: 0, test: null, last: null };
+function loadCirc() { try { const v = JSON.parse(localStorage.getItem(CIRC_KEY) || "null"); if (v && v.r1 > 0 && v.r2 > v.r1) { circ.r1 = v.r1; circ.r2 = v.r2; circ.t1 = typeof v.t1 === "number" ? v.t1 : null; circ.t2 = typeof v.t2 === "number" ? v.t2 : null; } } catch (_) {} }
+const saveCirc = () => { try { localStorage.setItem(CIRC_KEY, JSON.stringify({ r1: circ.r1, r2: circ.r2, t1: circ.t1, t2: circ.t2 })); } catch (_) {} };
+const modelRssi = (r) => cal.a - 10 * cal.n * Math.log10(r);
+const thr = () => ({ t1: circ.t1 !== null ? circ.t1 : modelRssi(circ.r1), t2: circ.t2 !== null ? circ.t2 : modelRssi(circ.r2) });
+const rawZone = (m) => { if (m === null) return "none"; const t = thr(); return m >= t.t1 ? "inside" : m >= t.t2 ? "approaching" : "outside"; };
+const ZONE_TXT = { inside: "INSIDE the circle", approaching: "Approaching (in the outer ring)", outside: "Outside", none: "No signal" };
+const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
 
 /* ---------- diagnostics ---------- */
 const logs = [];
@@ -385,6 +431,7 @@ function onAdv(p) {
     if (state.scanning) { if (!b.s) b.s = { n: 0, first: null, last: null, sum: 0, v: [] }; b.s.v.push(p.rssi); b.s.n++; if (b.s.first === null) b.s.first = now; b.s.last = now; b.s.sum += p.rssi; }
     b.samples.push({ t: now, v: p.rssi });
     if (state.rec && state.rec.key === p.key) state.rec.samples.push({ t: now, v: p.rssi });
+    if (circ.test && circ.test.key === p.key) circ.test.pkts.push({ t: now, v: p.rssi });
   }
 }
 function prune() { const cut = Date.now() - KEEP_MS; for (const b of state.beacons.values()) while (b.samples.length && b.samples[0].t < cut) b.samples.shift(); }
@@ -586,6 +633,111 @@ function renderMeter() {
   for (const t of [`avg ${f1(st && st.mean)}`, `median ${f0(st && st.median)}`, `min ${f0(st && st.min)}`, `max ${f0(st && st.max)}`, `${f1((st ? st.n : 0) / (WINDOW_MS / 1000))}/s`]) kv.appendChild(el("span", "", t));
 }
 
+/* ---------- circle test logic ---------- */
+function smoothed() {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null;
+  if (!b || !state.scanning) return null;
+  const now = Date.now(), w = b.samples.filter((s) => now - s.t <= SMOOTH_MS).map((s) => s.v);
+  return w.length ? median(w) : null;
+}
+function tickCircle() {
+  const m = smoothed(), raw = rawZone(m), now = Date.now();
+  if (raw === circ.zone) circ.pending = null;
+  else if (circ.pending !== raw) { circ.pending = raw; circ.since = now; }
+  else if (now - circ.since >= DWELL_MS) { circ.zone = raw; circ.pending = null; if (raw === "inside") buzz([100, 60, 100]); }
+  if (circ.test) {
+    const T = circ.test;
+    if (now - T.start >= T.ms) finishCircle();
+    else { T.ticks.push({ t: now - T.start, m, raw, zone: circ.zone }); $("circBar").style.width = Math.min(100, ((now - T.start) / T.ms) * 100) + "%"; $("circMsg").textContent = `Testing… ${Math.max(0, Math.ceil((T.ms - (now - T.start)) / 1000))} s left. Stay where you are, or walk in slowly.`; }
+  }
+  renderCircleLive(m);
+}
+function renderCircleLive(m) {
+  const t = thr(), z = circ.zone, b = state.tracked ? state.beacons.get(state.tracked) : null;
+  const ban = $("zoneBanner");
+  ban.className = "zone " + z;
+  ban.textContent = !b ? "Track a beacon to start" : ZONE_TXT[z];
+  const sm = el("small", "", !b ? "Start the scan and tap Track on the centre beacon" : m === null ? "No packets in the last 2 seconds" : `${f0(m)} dBm ≈ ${fmtD(estDist(m))} from the beacon`);
+  ban.appendChild(sm);
+  $("circThr").textContent = `Inside when the signal is ${f0(t.t1)} dBm or stronger (${circ.r1} m). Approaching from ${f0(t.t2)} dBm (${circ.r2} m). ${circ.t1 !== null || circ.t2 !== null ? "Edges set from your own readings." : "Edges come from the distance model: rough guess."}`;
+  $("edge1").textContent = `I'm at the ${circ.r1} m edge: use my reading`;
+  $("edge2").textContent = `I'm at the ${circ.r2} m edge: use my reading`;
+  $("runCircle").disabled = !b || !state.scanning || !!circ.test;
+  $("runCircle").textContent = circ.test ? "Testing…" : "Run 15 s circle test";
+}
+function startCircle() {
+  if (!state.tracked || !state.scanning || circ.test) return;
+  circ.test = { key: state.tracked, start: Date.now(), ms: TEST_MS, ticks: [], pkts: [], name: nameOf(state.beacons.get(state.tracked)), thr: thr(), edge: circ.t1 !== null || circ.t2 !== null, r1: circ.r1, r2: circ.r2, calibrated: !!cal.fitted };
+  circ.last = null; fillCircle($("circResult")); fillCircle($("circRes")); acquireWake(); buzz(60);
+}
+function finishCircle() {
+  const T = circ.test; circ.test = null; $("circBar").style.width = "0%";
+  const secs = TEST_MS / 1000, ticks = T.ticks.filter((x) => x.t < TEST_MS), N = Math.max(1, ticks.length);
+  const pct = (z) => Math.round((100 * ticks.filter((x) => x.zone === z).length) / N);
+  const flips = (key) => { let c = 0; for (let i = 1; i < ticks.length; i++) if (ticks[i][key] !== ticks[i - 1][key]) c++; return c; };
+  const pk = T.pkts.filter((q) => q.t - T.start < TEST_MS), times = pk.map((q) => q.t - T.start).sort((a, b) => a - b);
+  let longest = 0, prev = 0; for (const t of times) { longest = Math.max(longest, t - prev); prev = t; } longest = Math.max(longest, TEST_MS - prev);
+  const heardSecs = new Set(times.map((t) => Math.floor(t / 1000))).size;
+  const vals = pk.map((q) => q.v), st = stats(vals);
+  const firstOf = (zs) => { const x = ticks.find((k) => zs.includes(k.zone)); return x ? Math.round(x.t / 100) / 10 : null; };
+  const strip = [];
+  for (let sec = 0; sec < secs; sec++) {
+    const inSec = ticks.filter((x) => Math.floor(x.t / 1000) === sec), ms = inSec.map((x) => x.m).filter((v) => v !== null);
+    const counts = {}; for (const x of inSec) counts[x.zone] = (counts[x.zone] || 0) + 1;
+    const zone = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "none";
+    strip.push({ zone, m: ms.length ? median(ms) : null });
+  }
+  circ.last = { at: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }), name: T.name, thr: T.thr, edge: T.edge, r1: T.r1, r2: T.r2, calibrated: T.calibrated,
+    inside: pct("inside"), approaching: pct("approaching"), outside: pct("outside"), none: pct("none"),
+    flips: flips("zone"), rawFlips: flips("raw"), firstApproach: firstOf(["approaching", "inside"]), firstInside: firstOf(["inside"]),
+    n: pk.length, perSec: pk.length / secs, heardSecs, longest: longest / 1000, st, strip, estMedian: st ? estDist(st.median) : null };
+  fillCircle($("circResult")); fillCircle($("circRes")); $("circMsg").textContent = "Test finished. Results below."; buzz([120, 80, 120]);
+}
+function verdict(r) {
+  const parts = [];
+  if (r.inside >= 70) parts.push(`You were inside the ${r.r1} m circle for ${r.inside}% of the test.`);
+  else if (r.inside > 0) parts.push(`You were inside the ${r.r1} m circle for only ${r.inside}% of the test.`);
+  else parts.push(`You were never detected inside the ${r.r1} m circle.`);
+  if (r.firstInside !== null) parts.push(`First detected inside after ${r.firstInside} s.`);
+  if (r.heardSecs < 13 || r.longest > 2) parts.push(`The signal is sporadic: it was heard in ${r.heardSecs} of 15 seconds, with silences up to ${f1(r.longest)} s.`);
+  else parts.push(`The signal was steady: heard in ${r.heardSecs} of 15 seconds.`);
+  if (r.flips >= 3) parts.push(`The state changed ${r.flips} times, so detection near the edge is unreliable.`);
+  else if (r.rawFlips >= 6) parts.push(`The raw signal crossed the edge ${r.rawFlips} times. Smoothing hid it, but expect jumpy detection right at the boundary.`);
+  return parts.join(" ");
+}
+function fillCircle(box) {
+  box.textContent = ""; const r = circ.last;
+  if (box.id === "circRes") box.hidden = !r && !circ.test;
+  if (circ.test && !r) { box.appendChild(el("p", "muted", "Testing… results appear here after 15 seconds.")); return; }
+  if (!r) return;
+  if (box.id === "circRes") box.appendChild(el("h2", "", "Circle test result"));
+  else box.appendChild(el("h2", "", "Circle test result · " + r.at));
+  box.appendChild(el("p", "", verdict(r)));
+  const three = el("div", "three");
+  for (const [v, l] of [[r.inside + "%", "inside"], [r.approaching + "%", "approaching"], [r.outside + "%", "outside"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l + (r.none ? "" : ""))); three.appendChild(d); }
+  box.appendChild(three);
+  if (r.none) box.appendChild(el("p", "muted", `${r.none}% of the time there was no signal at all.`));
+  box.appendChild(el("div", "legend", ""));
+  const lg = box.lastChild; lg.innerHTML = '<span><i class="inside"></i>inside</span><span><i class="approaching"></i>approaching</span><span><i></i>outside</span><span><i class="none"></i>no signal</span>';
+  const tl = el("div", "tl");
+  r.strip.forEach((x) => { const d = el("div", x.zone, x.m === null ? "–" : String(Math.round(x.m))); d.title = ZONE_TXT[x.zone]; tl.appendChild(d); });
+  box.appendChild(tl);
+  box.appendChild(el("p", "muted", "Each square is one second of the test, left to right, with the typical dBm."));
+  const facts = [
+    `Packets heard: ${r.n} (${f1(r.perSec)} per second), in ${r.heardSecs} of 15 seconds. Longest silence: ${f1(r.longest)} s.`,
+    `State changes: ${r.flips} (the raw signal flickered ${r.rawFlips} times before smoothing).`,
+    r.firstApproach !== null ? `Entered the outer ring after ${r.firstApproach} s${r.firstInside !== null ? " and the inner circle after " + r.firstInside + " s" : ""}.` : "Never reached the outer ring.",
+    r.st ? `Signal: typical ${f0(r.st.median)} dBm, weak 10% ${f0(r.st.p10)}, strong 10% ${f0(r.st.p90)}. Estimated distance ≈ ${fmtD(r.estMedian)}.` : "No readings were received.",
+    `Edges used: inside ≥ ${f0(r.thr.t1)} dBm (${r.r1} m), approaching ≥ ${f0(r.thr.t2)} dBm (${r.r2} m) — ${r.edge ? "set from your own readings" : r.calibrated ? "from the calibrated model" : "from the rough distance model"}.`,
+  ];
+  for (const f of facts) box.appendChild(el("p", "muted", f));
+  const cp = el("button", "small", "Copy result"); cp.addEventListener("click", async () => {
+    const txt = ["Circle test " + r.at + " · beacon " + r.name, verdict(r), ...facts, "Seconds: " + r.strip.map((x) => x.zone[0].toUpperCase() + (x.m === null ? "" : Math.round(x.m))).join(" ")].join("\n");
+    try { await navigator.clipboard.writeText(txt); cp.textContent = "Copied"; } catch (_) { cp.textContent = "Could not copy"; } setTimeout(() => { cp.textContent = "Copy result"; }, 1500);
+  });
+  box.appendChild(cp);
+}
+
 /* ---------- recorder and dock ---------- */
 function updateDock() {
   const b = state.tracked ? state.beacons.get(state.tracked) : null;
@@ -722,6 +874,20 @@ $("calFit").addEventListener("click", () => {
   cal = { a: Math.round(aFit * 10) / 10, n: Math.round(Math.min(5, Math.max(1.2, nFit)) * 100) / 100, fitted: `fitted from ${pool.length} spots` };
   saveCal(); syncCalUi();
 });
+function syncCircUi() { $("r1").value = String(circ.r1); $("r2").value = String(circ.r2); renderCircleLive(smoothed()); }
+$("r1").addEventListener("change", () => { const x = num1($("r1").value); if (x !== null && x >= 1 && x <= 100) { circ.r1 = x; if (circ.r2 <= x) circ.r2 = x + 2; circ.t1 = null; circ.t2 = null; saveCirc(); } syncCircUi(); });
+$("r2").addEventListener("change", () => { const x = num1($("r2").value); if (x !== null && x > circ.r1 && x <= 150) { circ.r2 = x; circ.t2 = null; saveCirc(); } syncCircUi(); });
+function setEdge(which) {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null, st = b && windowStats(b);
+  if (!st || st.n < 5) { $("circMsg").textContent = "Track the beacon, stand exactly on that edge, and wait about 10 seconds for readings first."; return; }
+  const v = Math.round(st.median);
+  if (which === 1) { if (circ.t2 !== null && v <= circ.t2) { $("circMsg").textContent = "The inner edge must read stronger than the outer edge. Check where you stood."; return; } circ.t1 = v; }
+  else { if (circ.t1 !== null && v >= circ.t1) { $("circMsg").textContent = "The outer edge must read weaker than the inner edge. Check where you stood."; return; } circ.t2 = v; }
+  saveCirc(); $("circMsg").textContent = `Saved: the ${which === 1 ? circ.r1 : circ.r2} m edge is ${v} dBm.`; syncCircUi();
+}
+$("edge1").addEventListener("click", () => setEdge(1));
+$("edge2").addEventListener("click", () => setEdge(2));
+$("runCircle").addEventListener("click", startCircle);
 $("focusOnly").addEventListener("change", () => { state.focus = $("focusOnly").checked; renderList(); });
 $("start").addEventListener("click", startScan);
 $("stop").addEventListener("click", stopScan);
@@ -732,9 +898,10 @@ $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
 
-loadPrefs(); syncCalUi(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
+loadPrefs(); loadCirc(); syncCalUi(); syncCircUi(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
 setInterval(renderList, 500);
 setInterval(tickRec, 200);
+setInterval(tickCircle, 250);
 </script>
 </body>
 </html>
