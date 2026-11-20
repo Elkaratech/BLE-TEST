@@ -266,10 +266,15 @@ function renderStatus() {
 
 /* ---------- parsing ---------- */
 function parseAdv(e) {
-  const out = { key: e.device ? e.device.id : "unknown", name: e.name || (e.device && e.device.name) || "", rssi: e.rssi, tx: e.txPower, kinds: [], ib: null, ed: null, raw: [] };
+  const out = { key: e.device ? e.device.id : "unknown", name: e.name || (e.device && e.device.name) || "", rssi: e.rssi, tx: e.txPower, kinds: [], ib: null, ed: null, er: null, raw: [] };
   if (e.manufacturerData) for (const [id, dv] of e.manufacturerData) {
     const b = bytesOf(dv);
     out.raw.push(`mfr 0x${id.toString(16).toUpperCase().padStart(4, "0")}: ${hex(b)}`);
+    if (id === 0x0ea5 && b.length >= 10) {
+      out.kinds.push("EasyReach");
+      const idBytes = [...b.slice(1, 7)].reverse().map((x) => x.toString(16).padStart(2, "0").toUpperCase());
+      out.er = { id: idBytes.join(":"), tail: b[b.length - 1], len: b.length };
+    }
     if (id === 0x004c && b.length >= 23 && b[0] === 0x02 && b[1] === 0x15) {
       out.kinds.push("iBeacon");
       out.ib = { uuid: fmtUuid(hex(b.slice(2, 18))), major: (b[18] << 8) | b[19], minor: (b[20] << 8) | b[21], measured: (b[22] << 24) >> 24 };
@@ -287,16 +292,18 @@ function parseAdv(e) {
       else out.kinds.push("Eddystone");
     }
   }
+  if (!out.kinds.length && /^ER-BLE/i.test(out.name)) out.kinds.push("EasyReach");
   return out;
 }
 function onAdv(p) {
   const now = Date.now();
   let b = state.beacons.get(p.key);
-  if (!b) { b = { key: p.key, name: "", kinds: new Set(), ib: null, ed: null, raw: "", samples: [], count: 0, last: now, rssi: null }; state.beacons.set(p.key, b); }
+  if (!b) { b = { key: p.key, name: "", kinds: new Set(), ib: null, ed: null, er: null, raw: "", samples: [], count: 0, last: now, rssi: null }; state.beacons.set(p.key, b); }
   if (p.name) b.name = p.name;
   p.kinds.forEach((k) => b.kinds.add(k));
   if (p.ib) b.ib = p.ib;
   if (p.ed) b.ed = p.ed;
+  if (p.er) b.er = p.er;
   if (p.raw.length) b.raw = p.raw.join(" | ");
   if (typeof p.rssi === "number") {
     b.rssi = p.rssi; b.last = now; b.count++;
@@ -309,6 +316,7 @@ const nameOf = (b) => b.name || (b.ib ? `iBeacon ${b.ib.major}/${b.ib.minor}` : 
 function describe(b) {
   const parts = [];
   if (b.ib) parts.push(`iBeacon · UUID ${b.ib.uuid} · major ${b.ib.major} · minor ${b.ib.minor} · measured power ${b.ib.measured} dBm`);
+  if (b.er) parts.push(`EasyReach · beacon ID ${b.er.id} · last data byte ${b.er.tail} (0x${b.er.tail.toString(16).toUpperCase()})`);
   if (b.ed) parts.push(b.ed.type === "UID" ? `Eddystone-UID · namespace ${b.ed.ns} · instance ${b.ed.inst} · power at 0 m ${b.ed.tx} dBm` : `Eddystone-${b.ed.type} · power at 0 m ${b.ed.tx} dBm`);
   return parts;
 }
