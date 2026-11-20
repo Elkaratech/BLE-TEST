@@ -102,6 +102,9 @@
 <main>
   <!-- ============ LIVE ============ -->
   <div class="view" id="v-live">
+    <div class="seg" id="modeSeg" role="group" aria-label="Test mode">
+      <button data-v="default" aria-pressed="true">Default test</button><button data-v="circle" aria-pressed="false">Circle test</button>
+    </div>
     <section class="card" aria-label="Scan">
       <div class="row">
         <button class="primary grow" id="start">Start scan</button>
@@ -135,7 +138,7 @@
       <div class="kv" id="mKv"></div>
     </section>
 
-    <section class="card" id="circleCard" aria-label="Circle test">
+    <section class="card" id="circleCard" aria-label="Circle test" hidden>
       <h2>Circle test</h2>
       <p class="muted" style="margin-top:0">Put the tracked beacon at the centre and walk in from outside. <b>Approaching</b> starts at the outer ring, and <b>Inside</b> starts at the inner circle.</p>
       <div class="zone none" id="zoneBanner" role="status">Track a beacon to start<small>Start the scan and tap Track on the centre beacon</small></div>
@@ -170,7 +173,7 @@
       </details>
     </section>
 
-    <section class="card" aria-label="Record settings">
+    <section class="card" id="recCard" aria-label="Record settings">
       <h2>Where are you standing?</h2>
       <div class="picks" id="spotPicks" role="group" aria-label="Spot"></div>
       <div style="margin-top:10px"><label class="l" for="dist">Or type a spot</label><input id="dist" type="text" placeholder="e.g. 4 m, near window" autocomplete="off"></div>
@@ -309,6 +312,7 @@ const SPOTS = ["1 m", "2 m", "3 m", "5 m", "8 m", "12 m", "Door", "Corridor", "F
 
 /* ---------- circle test: inside / approaching / outside, from the tracked beacon's signal ---------- */
 const CIRC_KEY = "ble-test-circle-v1", DWELL_MS = 1500, SMOOTH_MS = 2000, TEST_MS = 15000;
+state.mode = "default";
 const circ = { r1: 10, r2: 12, t1: null, t2: null, zone: "none", pending: null, since: 0, test: null, last: null };
 function loadCirc() { try { const v = JSON.parse(localStorage.getItem(CIRC_KEY) || "null"); if (v && v.r1 > 0 && v.r2 > v.r1) { circ.r1 = v.r1; circ.r2 = v.r2; circ.t1 = typeof v.t1 === "number" ? v.t1 : null; circ.t2 = typeof v.t2 === "number" ? v.t2 : null; } } catch (_) {} }
 const saveCirc = () => { try { localStorage.setItem(CIRC_KEY, JSON.stringify({ r1: circ.r1, r2: circ.r2, t1: circ.t1, t2: circ.t2 })); } catch (_) {} };
@@ -641,6 +645,7 @@ function smoothed() {
   return w.length ? median(w) : null;
 }
 function tickCircle() {
+  if (state.mode !== "circle" && !circ.test) { circ.zone = "none"; circ.pending = null; return; }
   const m = smoothed(), raw = rawZone(m), now = Date.now();
   if (raw === circ.zone) circ.pending = null;
   else if (circ.pending !== raw) { circ.pending = raw; circ.since = now; }
@@ -741,7 +746,7 @@ function fillCircle(box) {
 /* ---------- recorder and dock ---------- */
 function updateDock() {
   const b = state.tracked ? state.beacons.get(state.tracked) : null;
-  const show = state.view === "live" && (state.scanning || state.rec);
+  const show = state.view === "live" && state.mode === "default" && (state.scanning || state.rec);
   $("dock").hidden = !show;
   const lost = b ? Date.now() - b.last > 3000 : true;
   $("dNum").textContent = b && !lost && b.rssi !== null ? String(b.rssi) : "–";
@@ -779,6 +784,20 @@ function finishRec() {
   setTimeout(() => { if (!state.rec) updateDock(); }, 2500);
   $("dockBar").style.width = "0";
 }
+
+/* ---------- test mode switch: Default test (record at spots) or Circle test ---------- */
+const MODE_KEY = "ble-test-mode-v1";
+function applyMode() {
+  $("circleCard").hidden = state.mode !== "circle";
+  $("recCard").hidden = state.mode !== "default";
+  $("modeSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === state.mode ? "true" : "false"));
+  updateDock(); if (state.mode === "circle") renderCircleLive(smoothed());
+}
+$("modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+  if (circ.test || state.rec) return;   // not while a recording is running
+  state.mode = b.dataset.v; try { localStorage.setItem(MODE_KEY, state.mode); } catch (_) {} applyMode();
+}));
+try { const m = localStorage.getItem(MODE_KEY); if (m === "circle" || m === "default") state.mode = m; } catch (_) {}
 
 /* ---------- spot chips, segmented controls ---------- */
 function buildSpots() {
@@ -898,7 +917,7 @@ $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
 
-loadPrefs(); loadCirc(); syncCalUi(); syncCircUi(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
+loadPrefs(); loadCirc(); syncCalUi(); syncCircUi(); applyMode(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
 setInterval(renderList, 500);
 setInterval(tickRec, 200);
 setInterval(tickCircle, 250);
