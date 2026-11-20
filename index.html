@@ -226,6 +226,15 @@ const state = {
   place: "in hand", secs: 30, spot: "",
 };
 const WINDOW_MS = 10_000, KEEP_MS = 5 * 60_000;
+// Fixed list order, so cards never jump when the signal changes. Beacons whose name or ID ends with these are
+// listed first, in this order; any other device follows, sorted by name.
+const PIN_ORDER = ["0030", "0018"];
+const pinRank = (b) => {
+  const n = (b.name || "").toUpperCase(), id = ((b.er && b.er.id) || "").replace(/:/g, "").toUpperCase();
+  const i = PIN_ORDER.findIndex((t) => n.endsWith(t) || id.endsWith(t));
+  return i < 0 ? 1000 : i;
+};
+const fixedOrder = (a, b) => pinRank(a) - pinRank(b) || (a.name || "~").localeCompare(b.name || "~") || a.key.localeCompare(b.key);
 const SPOTS = ["1 m", "2 m", "3 m", "5 m", "8 m", "12 m", "Door", "Corridor", "Far corner"];
 
 /* ---------- diagnostics ---------- */
@@ -440,7 +449,7 @@ function renderList() {
   const rows = all.filter((b) => {
     if (only && !b.kinds.size) return false;
     return !filter || (b.name + " " + describe(b).join(" ") + " " + b.raw + " " + [...b.kinds].join(" ")).toLowerCase().includes(filter);
-  }).sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999));
+  }).sort(fixedOrder);
   const list = $("list"); list.textContent = "";
   if (!rows.length) {
     list.appendChild(el("p", "muted", state.scanning ? (only ? "No beacons heard yet. Move closer to the beacon, or untick “Only beacons” to see every Bluetooth device." : "Nothing heard yet.") : "Nothing yet. Press Start scan with the beacon switched on and close to the phone."));
