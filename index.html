@@ -106,6 +106,8 @@
       </div>
     </section>
 
+    <section class="card tint" id="sumLive" hidden aria-label="Last scan summary"></section>
+
     <section class="card tint meter" id="meterCard" hidden aria-label="Tracked beacon">
       <div class="row" style="justify-content:space-between">
         <span class="chip ok" id="mKind">Tracking</span>
@@ -113,8 +115,25 @@
       </div>
       <div style="margin:8px 0 4px"><span class="num" id="mNum">–</span><span class="unit">dBm</span></div>
       <div class="lab" id="mLab">–</div>
+      <div id="mDist" style="font-size:1.15rem;font-weight:800;margin-top:2px"></div>
       <div class="bar" style="margin:8px 0" aria-hidden="true"><i id="mBar"></i></div>
       <div class="kv" id="mKv"></div>
+    </section>
+
+    <section class="card" aria-label="Distance estimate settings">
+      <details>
+        <summary>Distance estimate settings</summary>
+        <p class="muted">Distance is a rough estimate from signal strength: distance = 10 ^ ((A − signal) ÷ (10 × n)). Indoors it is often off by 30 to 50%, so treat it as a guide.</p>
+        <div class="row">
+          <div class="grow"><label class="l" for="calA">Signal at 1 m, A (dBm)</label><input id="calA" type="text" inputmode="decimal" autocomplete="off"></div>
+          <div class="grow"><label class="l" for="calN">Path-loss n (2 open air, 2.5 to 3.5 indoors)</label><input id="calN" type="text" inputmode="decimal" autocomplete="off"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="calUse" class="small grow">Use current reading as 1 m</button>
+          <button id="calFit" class="small grow">Fit from my results</button>
+        </div>
+        <p class="muted" id="calNote" role="status" style="margin-bottom:0"></p>
+      </details>
     </section>
 
     <section class="card" aria-label="Record settings">
@@ -140,12 +159,15 @@
         <div class="grow"><input id="filter" type="text" placeholder="Filter: name, UUID, FEAA…" autocomplete="off" aria-label="Filter beacons"></div>
         <label class="row" style="gap:6px;font-weight:700;font-size:.9rem;min-height:44px"><input type="checkbox" id="onlyBeacons" checked style="width:22px;height:22px"> Only beacons</label>
       </div>
+      <label class="row" style="gap:6px;font-weight:700;font-size:.9rem;min-height:44px"><input type="checkbox" id="focusOnly" style="width:22px;height:22px"> Focus: show only the tracked beacon</label>
       <div id="list" aria-live="polite" style="display:grid;gap:8px"><p class="muted">Nothing yet. Press Start scan with the beacon switched on and close to the phone.</p></div>
+      <div id="ignoredBox" style="margin-top:10px"></div>
     </section>
   </div>
 
   <!-- ============ RESULTS ============ -->
   <div class="view" id="v-results" hidden>
+    <section class="card tint" id="sumRes" hidden aria-label="Last scan summary"></section>
     <section class="card" aria-label="Results">
       <h2>Results</h2>
       <p class="muted" id="noResults" style="margin-top:0">Nothing recorded yet. On the Live tab, track a beacon and press Record at each spot.</p>
@@ -226,6 +248,19 @@ const state = {
   place: "in hand", secs: 30, spot: "",
 };
 const WINDOW_MS = 10_000, KEEP_MS = 5 * 60_000;
+state.ignored = new Set(); state.focus = false; state.lastSummary = null; state.sessionStart = 0;
+/* distance estimate: log-distance path loss. A = signal at 1 m, n = path-loss exponent */
+const CAL_KEY = "ble-test-cal-v1", IGN_KEY = "ble-test-ignored-v1";
+let cal = { a: -59, n: 2.5, fitted: "" };
+function loadPrefs() {
+  try { const v = JSON.parse(localStorage.getItem(CAL_KEY) || "null"); if (v && typeof v.a === "number" && typeof v.n === "number") cal = { a: v.a, n: v.n, fitted: v.fitted || "" }; } catch (_) {}
+  try { const g = JSON.parse(localStorage.getItem(IGN_KEY) || "[]"); if (Array.isArray(g)) state.ignored = new Set(g); } catch (_) {}
+}
+const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (_) {} };
+const saveIgn = () => { try { localStorage.setItem(IGN_KEY, JSON.stringify([...state.ignored])); } catch (_) {} };
+const estDist = (rssi) => (typeof rssi === "number" ? 10 ** ((cal.a - rssi) / (10 * cal.n)) : null);
+const fmtD = (d) => (d === null || d === undefined || !isFinite(d) ? "–" : d < 10 ? (Math.round(d * 10) / 10) + " m" : Math.round(d) + " m");
+const parseMeters = (t) => { const m = /(\d+(?:\.\d+)?)\s*m\b/i.exec(String(t || "")); return m ? Number(m[1]) : null; };
 // Fixed list order, so cards never jump when the signal changes. Beacons whose name or ID ends with these are
 // listed first, in this order; any other device follows, sorted by name.
 const PIN_ORDER = ["0030", "0018"];
@@ -271,7 +306,7 @@ function stats(a) {
   const q = (p) => s[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))];
   const median = n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
   const sd = Math.sqrt(s.reduce((p, c) => p + (c - mean) ** 2, 0) / n);
-  return { n, mean, median, p10: q(0.1), min: s[0], max: s[n - 1], sd };
+  return { n, mean, median, p10: q(0.1), p90: q(0.9), min: s[0], max: s[n - 1], sd };
 }
 const f1 = (x) => (x === null || x === undefined ? "–" : (Math.round(x * 10) / 10).toString());
 const f0 = (x) => (x === null || x === undefined ? "–" : Math.round(x).toString());
@@ -347,6 +382,7 @@ function onAdv(p) {
   if (p.raw.length) b.raw = p.raw.join(" | ");
   if (typeof p.rssi === "number") {
     b.rssi = p.rssi; b.last = now; b.count++;
+    if (state.scanning) { if (!b.s) b.s = { n: 0, first: null, last: null, sum: 0 }; b.s.n++; if (b.s.first === null) b.s.first = now; b.s.last = now; b.s.sum += p.rssi; }
     b.samples.push({ t: now, v: p.rssi });
     if (state.rec && state.rec.key === p.key) state.rec.samples.push({ t: now, v: p.rssi });
   }
@@ -365,6 +401,35 @@ function describe(b) {
 async function acquireWake() {
   try { if ("wakeLock" in navigator && !state.wake) { state.wake = await navigator.wakeLock.request("screen"); state.wake.addEventListener("release", () => { state.wake = null; }); } } catch (_) {}
 }
+function beginSession() { state.sessionStart = Date.now(); state.lastSummary = null; for (const b of state.beacons.values()) b.s = null; renderSummary(); }
+function buildSummary() {
+  const dur = Math.max(1, (Date.now() - state.sessionStart) / 1000);
+  const all = [...state.beacons.values()];
+  const rows = all.filter((b) => b.kinds.size && b.s && b.s.n > 0).sort(fixedOrder).map((b) => ({
+    name: nameOf(b), ignored: state.ignored.has(b.key), n: b.s.n, perSec: b.s.n / dur,
+    gapMs: b.s.n > 1 ? (b.s.last - b.s.first) / (b.s.n - 1) : null, avgRssi: b.s.sum / b.s.n,
+  }));
+  return { dur, rows, other: all.filter((b) => !b.kinds.size && b.s).reduce((a, b) => a + b.s.n, 0), at: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+}
+function fillSummary(box) {
+  box.textContent = "";
+  const m = state.lastSummary; box.hidden = !m; if (!m) return;
+  box.appendChild(el("h2", "", "Last scan summary"));
+  const mins = Math.floor(m.dur / 60), secs = Math.round(m.dur % 60);
+  box.appendChild(el("p", "muted", `Stopped at ${m.at} · scanned for ${mins ? mins + " min " : ""}${secs} s`));
+  if (!m.rows.length) box.appendChild(el("p", "", "No beacon packets were received during this scan."));
+  for (const r of m.rows) {
+    const c = el("div", "res"); c.style.marginBottom = "8px";
+    c.appendChild(el("b", "", r.name + (r.ignored ? " (ignored)" : "")));
+    const three = el("div", "three");
+    for (const [v, l] of [[f1(r.perSec), "avg packets/s"], [r.gapMs === null ? "–" : f0(r.gapMs), "avg gap, ms"], [f0(r.avgRssi), "avg dBm"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l)); three.appendChild(d); }
+    c.appendChild(three);
+    c.appendChild(el("div", "muted", `${r.n} packets received in total. Average frequency = packets ÷ scan time. The gap is the average time between packets while the beacon was heard.`));
+    box.appendChild(c);
+  }
+  if (m.other) box.appendChild(el("p", "muted", `${m.other} packets came from other, non-beacon devices.`));
+}
+function renderSummary() { fillSummary($("sumLive")); fillSummary($("sumRes")); }
 const onRealAdv = (e) => { state.packets++; state.lastPacket = Date.now(); onAdv(parseAdv(e)); };
 async function startScan() {
   if (!bt || !bt.requestLEScan) return;
@@ -372,12 +437,13 @@ async function startScan() {
     log("Start scan pressed: calling requestLEScan");
     state.scan = await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
     bt.addEventListener("advertisementreceived", onRealAdv);
-    state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
+    beginSession(); state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
     log("requestLEScan started, scan.active = " + state.scan.active);
   } catch (err) { log("requestLEScan FAILED: " + (err && err.name) + " " + (err && err.message)); $("scanInfo").textContent = "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag."; }
 }
 function stopScan() {
   log("Stop pressed");
+  if (state.scanning) state.lastSummary = buildSummary();
   try { if (state.scan && state.scan.active) state.scan.stop(); } catch (_) {}
   if (bt) bt.removeEventListener("advertisementreceived", onRealAdv);
   clearInterval(state.demoTimer); state.demoTimer = null;
@@ -385,7 +451,7 @@ function stopScan() {
   state.pickers = [];
   state.scan = null; state.scanning = false;
   if (state.wake) { try { state.wake.release(); } catch (_) {} state.wake = null; }
-  $("demoBox").hidden = true; setScanUi();
+  $("demoBox").hidden = true; setScanUi(); renderSummary();
 }
 function setScanUi() {
   $("start").disabled = state.scanning || !(bt && bt.requestLEScan);
@@ -411,6 +477,7 @@ async function startPicker() {
     state.pickers.push(dev);
     await dev.watchAdvertisements({ signal: state.pickAbort.signal });
     log("watchAdvertisements started, watching = " + dev.watchingAdvertisements);
+    if (!state.scanning) beginSession();
     state.scanning = true; state.scanStart = Date.now(); acquireWake(); setScanUi();
     $("scanInfo").textContent = "Reading " + (dev.name || "the chosen device") + ". Keep this page open and the screen on.";
   } catch (err) {
@@ -421,7 +488,7 @@ async function startPicker() {
 }
 
 function startDemo() {
-  state.scanning = true; setScanUi();
+  beginSession(); state.scanning = true; state.scanStart = Date.now(); setScanUi();
   $("scanInfo").textContent = "Demo running with made-up beacons.";
   $("demoBox").hidden = false;
   const rnd = () => (Math.random() + Math.random() + Math.random() - 1.5) * 4;
@@ -444,9 +511,12 @@ function renderList() {
   const filter = $("filter").value.trim().toLowerCase(), only = $("onlyBeacons").checked, now = Date.now();
   const all = [...state.beacons.values()];
   // Auto-track: if exactly one real beacon is around and the user has not chosen otherwise, track it.
-  const cands = all.filter((b) => b.kinds.size);
+  const visible = all.filter((b) => !state.ignored.has(b.key));
+  if (state.tracked && state.ignored.has(state.tracked)) state.tracked = null;
+  const cands = visible.filter((b) => b.kinds.size);
   if (!state.tracked && !state.userUntracked && cands.length === 1) state.tracked = cands[0].key;
-  const rows = all.filter((b) => {
+  const rows = visible.filter((b) => {
+    if (state.focus && state.tracked) return b.key === state.tracked;
     if (only && !b.kinds.size) return false;
     return !filter || (b.name + " " + describe(b).join(" ") + " " + b.raw + " " + [...b.kinds].join(" ")).toLowerCase().includes(filter);
   }).sort(fixedOrder);
@@ -463,16 +533,33 @@ function renderList() {
     top.appendChild(el("span", "grow"));
     for (const k of (b.kinds.size ? b.kinds : ["other device"])) top.appendChild(el("span", "chip", k));
     card.appendChild(top);
-    const btn = el("button", isT ? "primary" : "", isT ? "Tracking ✓ (tap to stop)" : "Track this beacon");
+    const acts = el("div", "row");
+    const btn = el("button", "grow" + (isT ? " primary" : ""), isT ? "Tracking ✓ (tap to stop)" : "Track this beacon");
     btn.addEventListener("click", () => { if (isT) { state.tracked = null; state.userUntracked = true; } else { state.tracked = b.key; state.userUntracked = false; } renderList(); });
-    card.appendChild(btn);
+    const ign = el("button", "small", "Ignore");
+    ign.setAttribute("aria-label", "Ignore " + nameOf(b));
+    ign.addEventListener("click", () => { state.ignored.add(b.key); if (state.tracked === b.key) { state.tracked = null; } saveIgn(); renderList(); });
+    acts.append(btn, ign); card.appendChild(acts);
     if (b.name) card.appendChild(el("div", "muted", "Name: " + b.name));
     for (const line of describe(b)) card.appendChild(el("div", "muted", line));
     if (b.raw) card.appendChild(el("div", "mono muted", b.raw));
-    card.appendChild(el("div", "muted", `10 s avg ${f1(st && st.mean)} · ${f1((st ? st.n : 0) / (WINDOW_MS / 1000))} packets/s`));
+    const dEst = st ? estDist(st.median) : null;
+    card.appendChild(el("div", "muted", `10 s avg ${f1(st && st.mean)} · ${f1((st ? st.n : 0) / (WINDOW_MS / 1000))} packets/s${dEst !== null ? " · ≈ " + fmtD(dEst) : ""}${b.s && state.scanning ? " · scan avg " + f1(b.s.n / Math.max(1, (Date.now() - state.sessionStart) / 1000)) + "/s" : ""}`));
     list.appendChild(card);
   }
   if (rows.length > 10) list.appendChild(el("p", "muted", `${rows.length - 10} more not shown. Use the filter to narrow the list.`));
+  const ib = $("ignoredBox"); ib.textContent = "";
+  if (state.ignored.size) {
+    ib.appendChild(el("p", "muted", "Ignored (hidden from the list):"));
+    const wrap = el("div", "picks");
+    for (const key of state.ignored) {
+      const b = state.beacons.get(key);
+      const u = el("button", "", "Show again: " + (b ? nameOf(b) : String(key).slice(0, 8)));
+      u.addEventListener("click", () => { state.ignored.delete(key); saveIgn(); renderList(); });
+      wrap.appendChild(u);
+    }
+    ib.appendChild(wrap);
+  }
   renderMeter(); updateDock();
 }
 function renderMeter() {
@@ -486,6 +573,8 @@ function renderMeter() {
   $("mNum").textContent = lost || b.rssi === null ? "–" : String(b.rssi);
   $("mLab").textContent = lost ? "Not heard right now" : lab;
   $("mBar").style.width = pct + "%";
+  const dm = !lost && st ? estDist(st.median) : null;
+  $("mDist").textContent = dm === null ? "" : `≈ ${fmtD(dm)} away (${fmtD(estDist(st.p90))} to ${fmtD(estDist(st.p10))}) · ${cal.fitted ? "calibrated" : "rough guess, not calibrated"}`;
   const kv = $("mKv"); kv.textContent = "";
   for (const t of [`avg ${f1(st && st.mean)}`, `median ${f0(st && st.median)}`, `min ${f0(st && st.min)}`, `max ${f0(st && st.max)}`, `${f1((st ? st.n : 0) / (WINDOW_MS / 1000))}/s`]) kv.appendChild(el("span", "", t));
 }
@@ -523,7 +612,8 @@ function finishRec() {
   const secs = Math.round(r.ms / 1000);
   const buckets = new Set(r.samples.map((s) => Math.floor((s.t - r.start) / 1000)));
   state.results.push({ time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }), beacon: r.meta.label, dist: r.meta.dist, place: r.meta.place, note: r.meta.note,
-    n: st ? st.n : 0, mean: st && st.mean, median: st && st.median, p10: st && st.p10, min: st && st.min, max: st && st.max, sd: st && st.sd, pps: st ? st.n / secs : 0, heard: Math.round((buckets.size / secs) * 100) });
+    n: st ? st.n : 0, mean: st && st.mean, median: st && st.median, p10: st && st.p10, min: st && st.min, max: st && st.max, sd: st && st.sd, pps: st ? st.n / secs : 0, heard: Math.round((buckets.size / secs) * 100),
+    est: st ? estDist(st.median) : null, estLo: st ? estDist(st.p90) : null, estHi: st ? estDist(st.p10) : null, actual: parseMeters(r.meta.dist) });
   saveResults(); renderResults(); buzz([120, 80, 120]);
   const last = state.results[state.results.length - 1];
   $("rec").textContent = st ? `Saved · typical ${f0(last.median)} dBm · heard ${last.heard}%` : "Nothing heard. Saved as a miss.";
@@ -567,6 +657,10 @@ function renderResults() {
     const three = el("div", "three");
     for (const [v, l] of [[f0(r.median), "typical dBm"], [f0(r.p10), "weak 10% dBm"], [r.heard + "%", "heard"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l)); three.appendChild(d); }
     c.appendChild(three);
+    if (r.est !== null && r.est !== undefined) {
+      const diff = r.actual ? ` · you stood at ${r.actual} m (${r.est - r.actual >= 0 ? "+" : "−"}${f1(Math.abs(r.est - r.actual))} m off)` : "";
+      c.appendChild(el("div", "", `Estimated distance ≈ ${fmtD(r.est)} (${fmtD(r.estLo)} to ${fmtD(r.estHi)})${diff}`));
+    }
     c.appendChild(el("div", "muted", `avg ${f1(r.mean)} · min ${f0(r.min)} · max ${f0(r.max)} · spread ${f1(r.sd)} · ${r.n} packets (${f1(r.pps)}/s)${r.note ? " · " + r.note : ""}`));
     box.appendChild(c);
   });
@@ -576,9 +670,9 @@ function renderResults() {
 }
 const safe = (s) => { s = String(s ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
 function csv() {
-  const head = ["time", "beacon", "spot", "phone", "avg_dbm", "median_dbm", "weak10_dbm", "min_dbm", "max_dbm", "spread_dbm", "packets", "packets_per_s", "seconds_heard_pct", "note"];
+  const head = ["time", "beacon", "spot", "phone", "avg_dbm", "median_dbm", "weak10_dbm", "min_dbm", "max_dbm", "spread_dbm", "packets", "packets_per_s", "seconds_heard_pct", "est_distance_m", "est_low_m", "est_high_m", "actual_distance_m", "note"];
   const num = (x) => (x === null || x === undefined ? "" : Math.round(x * 100) / 100);
-  return [head.join(","), ...state.results.map((r) => [safe(r.time), safe(r.beacon), safe(r.dist), safe(r.place), num(r.mean), num(r.median), num(r.p10), num(r.min), num(r.max), num(r.sd), r.n, num(r.pps), r.heard, safe(r.note)].join(","))].join("\n");
+  return [head.join(","), ...state.results.map((r) => [safe(r.time), safe(r.beacon), safe(r.dist), safe(r.place), num(r.mean), num(r.median), num(r.p10), num(r.min), num(r.max), num(r.sd), r.n, num(r.pps), r.heard, num(r.est), num(r.estLo), num(r.estHi), num(r.actual), safe(r.note)].join(","))].join("\n");
 }
 const fileName = () => "ble-range-test-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + ".csv";
 const say = (m) => { $("resMsg").textContent = m; };
@@ -595,6 +689,33 @@ $("clear").addEventListener("click", () => { if (confirm("Delete all results on 
 
 /* ---------- wiring ---------- */
 $("copyDiag").addEventListener("click", async () => { try { await navigator.clipboard.writeText(renderDiag()); $("copyDiag").textContent = "Copied"; setTimeout(() => { $("copyDiag").textContent = "Copy diagnostics"; }, 1500); } catch (_) { $("copyDiag").textContent = "Select the text above and copy it"; } });
+function syncCalUi() {
+  $("calA").value = String(cal.a); $("calN").value = String(cal.n);
+  $("calNote").textContent = cal.fitted ? `Calibrated: ${cal.fitted}. A = ${cal.a} dBm, n = ${cal.n}.` : "Rough guess (not calibrated). Record at 1, 3 and 5 m, then tap “Fit from my results”.";
+}
+const num1 = (v) => { const x = Number(String(v).replace(",", ".").replace("−", "-")); return isFinite(x) ? x : null; };
+$("calA").addEventListener("change", () => { const x = num1($("calA").value); if (x !== null) { cal.a = Math.min(-20, Math.max(-100, x)); cal.fitted = ""; saveCal(); } syncCalUi(); });
+$("calN").addEventListener("change", () => { const x = num1($("calN").value); if (x !== null) { cal.n = Math.min(5, Math.max(1.2, x)); cal.fitted = ""; saveCal(); } syncCalUi(); });
+$("calUse").addEventListener("click", () => {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null, st = b && windowStats(b);
+  if (!st || st.n < 5) { $("calNote").textContent = "Track a beacon, hold the phone 1 m from it, and wait about 10 seconds for readings first."; return; }
+  cal.a = Math.round(st.median * 10) / 10; cal.fitted = "1 m reading of " + nameOf(b); saveCal(); syncCalUi();
+});
+$("calFit").addEventListener("click", () => {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null;
+  let pool = state.results.filter((r) => parseMeters(r.dist) > 0 && typeof r.median === "number");
+  if (b && pool.filter((r) => r.beacon === nameOf(b)).length >= 3) pool = pool.filter((r) => r.beacon === nameOf(b));
+  const ds = new Set(pool.map((r) => parseMeters(r.dist)));
+  if (pool.length < 3 || ds.size < 2) { $("calNote").textContent = "Record at least 3 spots with two or more different distances (for example 1 m, 3 m and 5 m), typed or picked like “3 m”, then try again."; return; }
+  const xs = pool.map((r) => 10 * Math.log10(parseMeters(r.dist))), ys = pool.map((r) => r.median);
+  const mx = xs.reduce((a, c) => a + c, 0) / xs.length, my = ys.reduce((a, c) => a + c, 0) / ys.length;
+  const sxx = xs.reduce((a, x) => a + (x - mx) ** 2, 0), sxy = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0);
+  const slope = sxy / sxx, nFit = -slope, aFit = my - slope * mx;
+  if (!(nFit > 0.5)) { $("calNote").textContent = "Your readings do not get weaker with distance, so no fit is possible. Check the spots and record again."; return; }
+  cal = { a: Math.round(aFit * 10) / 10, n: Math.round(Math.min(5, Math.max(1.2, nFit)) * 100) / 100, fitted: `fitted from ${pool.length} spots` };
+  saveCal(); syncCalUi();
+});
+$("focusOnly").addEventListener("change", () => { state.focus = $("focusOnly").checked; renderList(); });
 $("start").addEventListener("click", startScan);
 $("stop").addEventListener("click", stopScan);
 $("demo").addEventListener("click", startDemo);
@@ -604,7 +725,7 @@ $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
 
-loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
+loadPrefs(); syncCalUi(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
 setInterval(renderList, 500);
 setInterval(tickRec, 200);
 </script>
