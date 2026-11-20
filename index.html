@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffecae">
+<title>MUNKY BUNKY · BLE range test</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --primary:#f17141; --secondary:#ffecae; --ink:#2a1f18; --muted:#6b5d52; --line:#e6d6a3; --paper:#fffdf6; --danger:#b3261e; --nav:60px; --dock:84px; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html { touch-action:manipulation; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { background:var(--secondary); border-bottom:1.5px solid var(--line); padding:10px 16px; display:flex; align-items:center; gap:10px; position:sticky; top:0; z-index:5; padding-top:max(10px, env(safe-area-inset-top)); }
+  header h1 { margin:0; font-size:1.05rem; flex:1; line-height:1.2; }
+  header h1 small { display:block; font-weight:500; color:var(--muted); font-size:.78rem; }
+  main { max-width:640px; margin:0 auto; padding:12px 14px calc(var(--nav) + var(--dock) + 28px + env(safe-area-inset-bottom)); display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+  .view[hidden] { display:none; }
+  .view { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+  .card { background:#fff; border:1.5px solid var(--line); border-radius:16px; padding:14px; }
+  .tint { background:var(--secondary); }
+  h2 { margin:0 0 8px; font-size:1.05rem; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .grow { flex:1 1 9rem; min-width:0; }
+  label.l { display:block; font-weight:700; font-size:.85rem; margin:0 0 5px; }
+  input[type=text] { width:100%; min-height:50px; padding:8px 12px; border:1.5px solid var(--ink); border-radius:12px; background:#fff; color:var(--ink); font:inherit; font-size:16px; }
+  button { min-height:50px; padding:0 18px; border-radius:12px; border:1.5px solid var(--ink); background:#fff; color:var(--ink); font:inherit; font-weight:700; cursor:pointer; }
+  button:active:not(:disabled) { transform:scale(.98); }
+  button.primary { background:var(--primary); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.small { min-height:44px; padding:0 14px; font-size:.92rem; }
+  :focus-visible { outline:3px solid var(--primary); outline-offset:2px; }
+  .chip { display:inline-block; padding:2px 10px; border-radius:999px; border:1.5px solid var(--ink); background:var(--secondary); font-size:.78rem; font-weight:700; white-space:nowrap; }
+  .chip.ok { background:var(--primary); }
+  .chip.bad { background:#fff; color:var(--danger); border-color:var(--danger); }
+  .muted { color:var(--muted); font-size:.9rem; }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.76rem; word-break:break-all; }
+  .bar { height:12px; border:1.5px solid var(--ink); border-radius:7px; background:#fff; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--primary); width:0; transition:width .2s; }
+  /* segmented controls and chips: one tap, no dropdowns */
+  .seg { display:flex; border:1.5px solid var(--ink); border-radius:12px; overflow:hidden; }
+  .seg button { flex:1; border:0; border-radius:0; min-height:48px; padding:0 6px; font-size:.95rem; border-right:1.5px solid var(--ink); background:#fff; }
+  .seg button:last-child { border-right:0; }
+  .seg button[aria-pressed=true] { background:var(--primary); }
+  .picks { display:flex; flex-wrap:wrap; gap:8px; }
+  .picks button { min-height:46px; padding:0 14px; border-radius:999px; font-size:.95rem; }
+  .picks button[aria-pressed=true] { background:var(--primary); }
+  /* live meter */
+  .meter .num { font-size:4rem; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
+  .meter .unit { font-size:1.1rem; color:var(--muted); margin-left:6px; }
+  .meter .lab { font-weight:800; font-size:1.1rem; }
+  .kv { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:.92rem; font-variant-numeric:tabular-nums; }
+  .beacon { border:1.5px solid var(--line); border-radius:14px; padding:12px; display:grid; gap:6px; }
+  .beacon.tracked { border-color:var(--ink); background:var(--secondary); }
+  .beacon .big { font-size:1.8rem; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.1; }
+  /* result cards */
+  .res { border:1.5px solid var(--line); border-radius:14px; padding:12px; display:grid; gap:6px; }
+  .res .head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+  .res .three { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; text-align:center; }
+  .res .three div { background:var(--secondary); border-radius:10px; padding:6px 2px; }
+  .res .three b { display:block; font-size:1.3rem; font-variant-numeric:tabular-nums; }
+  .res .three span { font-size:.72rem; color:var(--muted); }
+  .x { min-height:40px; padding:0 12px; }
+  /* fixed bottom: record dock + tab bar */
+  #dock { position:fixed; left:0; right:0; bottom:calc(var(--nav) + env(safe-area-inset-bottom)); z-index:6; background:var(--paper); border-top:1.5px solid var(--line); padding:8px 14px; }
+  #dock .in { max-width:640px; margin:0 auto; display:flex; align-items:center; gap:12px; }
+  #dock .sig { min-width:5.2rem; }
+  #dock .sig b { font-size:1.8rem; font-variant-numeric:tabular-nums; line-height:1; }
+  #dock .sig span { display:block; font-size:.72rem; color:var(--muted); }
+  #dock button { flex:1; min-height:56px; font-size:1.05rem; }
+  #dockBar { position:absolute; left:0; top:-1.5px; height:4px; background:var(--primary); width:0; }
+  nav { position:fixed; left:0; right:0; bottom:0; z-index:7; background:var(--secondary); border-top:1.5px solid var(--ink); display:flex; padding-bottom:env(safe-area-inset-bottom); }
+  nav button { flex:1; min-height:var(--nav); border:0; border-radius:0; background:transparent; font-size:.82rem; display:grid; place-items:center; gap:0; padding:6px 0; }
+  nav button span.i { font-size:1.35rem; line-height:1; }
+  nav button[aria-current=page] { background:var(--primary); }
+  details summary { cursor:pointer; font-weight:700; min-height:44px; display:flex; align-items:center; }
+  ol { margin:.5rem 0 0 1.2rem; padding:0; }
+  ol li { margin-bottom:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>BLE range test<small>MUNKY BUNKY · test tool, not the attendance system</small></h1>
+  <div id="mini"></div>
+</header>
+
+<main>
+  <!-- ============ LIVE ============ -->
+  <div class="view" id="v-live">
+    <section class="card" aria-label="Scan">
+      <div class="row">
+        <button class="primary grow" id="start">Start scan</button>
+        <button class="grow" id="stop" disabled>Stop</button>
+      </div>
+      <p class="muted" id="scanInfo" style="margin:10px 0 0">Not scanning.</p>
+      <p class="muted" id="help" style="margin:6px 0 0"></p>
+      <div class="row" style="margin-top:8px">
+        <button id="demo" class="small">Try demo (no beacon)</button>
+      </div>
+      <div id="demoBox" hidden style="margin-top:10px">
+        <label class="l" for="demoDist">Demo distance: <b id="demoDistVal">3 m</b></label>
+        <input id="demoDist" type="range" min="1" max="15" value="3" step="1" style="width:100%;height:36px">
+      </div>
+    </section>
+
+    <section class="card tint meter" id="meterCard" hidden aria-label="Tracked beacon">
+      <div class="row" style="justify-content:space-between">
+        <span class="chip ok" id="mKind">Tracking</span>
+        <span class="muted" id="mAge"></span>
+      </div>
+      <div style="margin:8px 0 4px"><span class="num" id="mNum">–</span><span class="unit">dBm</span></div>
+      <div class="lab" id="mLab">–</div>
+      <div class="bar" style="margin:8px 0" aria-hidden="true"><i id="mBar"></i></div>
+      <div class="kv" id="mKv"></div>
+    </section>
+
+    <section class="card" aria-label="Record settings">
+      <h2>Where are you standing?</h2>
+      <div class="picks" id="spotPicks" role="group" aria-label="Spot"></div>
+      <div style="margin-top:10px"><label class="l" for="dist">Or type a spot</label><input id="dist" type="text" placeholder="e.g. 4 m, near window" autocomplete="off"></div>
+      <label class="l" style="margin-top:12px">Phone is</label>
+      <div class="seg" id="placeSeg" role="group" aria-label="Phone position">
+        <button data-v="in hand" aria-pressed="true">Hand</button><button data-v="in pocket" aria-pressed="false">Pocket</button><button data-v="in bag" aria-pressed="false">Bag</button><button data-v="on desk" aria-pressed="false">Desk</button>
+      </div>
+      <label class="l" style="margin-top:12px">Record for</label>
+      <div class="seg" id="secsSeg" role="group" aria-label="Length">
+        <button data-v="15" aria-pressed="false">15 s</button><button data-v="30" aria-pressed="true">30 s</button><button data-v="60" aria-pressed="false">60 s</button>
+      </div>
+      <details style="margin-top:6px"><summary>Add a note (optional)</summary>
+        <input id="note" type="text" placeholder="TX power setting, battery, door open…" autocomplete="off">
+      </details>
+    </section>
+
+    <section class="card" aria-label="Beacons heard">
+      <h2>Beacons heard</h2>
+      <div class="row" style="margin-bottom:8px">
+        <div class="grow"><input id="filter" type="text" placeholder="Filter: name, UUID, FEAA…" autocomplete="off" aria-label="Filter beacons"></div>
+        <label class="row" style="gap:6px;font-weight:700;font-size:.9rem;min-height:44px"><input type="checkbox" id="onlyBeacons" checked style="width:22px;height:22px"> Only beacons</label>
+      </div>
+      <div id="list" aria-live="polite" style="display:grid;gap:8px"><p class="muted">Nothing yet. Press Start scan with the beacon switched on and close to the phone.</p></div>
+    </section>
+  </div>
+
+  <!-- ============ RESULTS ============ -->
+  <div class="view" id="v-results" hidden>
+    <section class="card" aria-label="Results">
+      <h2>Results</h2>
+      <p class="muted" id="noResults" style="margin-top:0">Nothing recorded yet. On the Live tab, track a beacon and press Record at each spot.</p>
+      <div id="resList" style="display:grid;gap:10px"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="share" class="grow primary">Share CSV</button>
+        <button id="download" class="grow">Download</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="copy" class="grow small">Copy CSV</button>
+        <button id="clear" class="grow small">Clear all</button>
+      </div>
+      <p class="muted" id="resMsg" role="status"></p>
+    </section>
+    <section class="card tint">
+      <h2>How to read this</h2>
+      <p class="muted" style="margin:0"><b>Typical</b> = the middle signal reading, in dBm. Closer to 0 is stronger (−60 is stronger than −85). <b>Weak 10%</b> = the level that 1 in 10 readings fell below. Use it as the threshold you can rely on. <b>Heard</b> = the share of seconds with at least one packet. A spot with a low Heard percentage is a spot where attendance could miss the beacon.</p>
+    </section>
+  </div>
+
+  <!-- ============ SETUP ============ -->
+  <div class="view" id="v-setup" hidden>
+    <section class="card" aria-label="This phone">
+      <h2>This phone</h2>
+      <div class="row" id="status"></div>
+    </section>
+    <section class="card tint">
+      <h2>Set up Chrome (once)</h2>
+      <ol>
+        <li>Use <b>Chrome</b> on Android and open this page from its https link.</li>
+        <li>In the address bar type <span class="mono">chrome://flags/#enable-experimental-web-platform-features</span>, set it to <b>Enabled</b>, then tap <b>Relaunch</b>.</li>
+        <li>Switch <b>Location</b> on (quick settings). Android needs it for Bluetooth scanning.</li>
+        <li>Switch <b>Bluetooth</b> on. When Chrome asks, allow <b>Nearby devices</b>.</li>
+        <li>Keep Chrome open and the screen on while testing. The page asks the phone not to sleep.</li>
+        <li>If scanning stops by itself: Settings → Apps → Chrome → Battery → <b>Unrestricted</b>.</li>
+      </ol>
+    </section>
+    <section class="card">
+      <h2>Tips for a good test</h2>
+      <ol>
+        <li>Mark spots on the floor first: 1, 3, 5, 8 and 12 m from the beacon, plus the corridor.</li>
+        <li>Stand still while recording. Keep the phone the same way for each spot.</li>
+        <li>Repeat with the phone in a pocket and a bag, since students will not hold it up.</li>
+        <li>Put the beacon where it will really be mounted, and keep it there for the whole test.</li>
+      </ol>
+    </section>
+  </div>
+</main>
+
+<div id="dock" hidden>
+  <div id="dockBar"></div>
+  <div class="in">
+    <div class="sig"><b id="dNum">–</b><span id="dLab">dBm</span></div>
+    <button class="primary" id="rec" disabled>Record</button>
+  </div>
+</div>
+
+<nav aria-label="Sections">
+  <button data-view="live" aria-current="page"><span class="i" aria-hidden="true">📡</span>Live</button>
+  <button data-view="results"><span class="i" aria-hidden="true">📋</span><span id="resTab">Results</span></button>
+  <button data-view="setup"><span class="i" aria-hidden="true">⚙️</span>Setup</button>
+</nav>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const bt = navigator.bluetooth;
+const state = {
+  beacons: new Map(), tracked: null, userUntracked: false,
+  scan: null, demoTimer: null, scanning: false,
+  rec: null, results: [], wake: null, view: "live",
+  place: "in hand", secs: 30, spot: "",
+};
+const WINDOW_MS = 10_000, KEEP_MS = 5 * 60_000;
+const SPOTS = ["1 m", "2 m", "3 m", "5 m", "8 m", "12 m", "Door", "Corridor", "Far corner"];
+
+/* ---------- helpers ---------- */
+const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+const bytesOf = (dv) => new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+const fmtUuid = (h) => `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`.toUpperCase();
+function stats(a) {
+  if (!a.length) return null;
+  const s = [...a].sort((x, y) => x - y), n = s.length;
+  const mean = s.reduce((p, c) => p + c, 0) / n;
+  const q = (p) => s[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))];
+  const median = n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  const sd = Math.sqrt(s.reduce((p, c) => p + (c - mean) ** 2, 0) / n);
+  return { n, mean, median, p10: q(0.1), min: s[0], max: s[n - 1], sd };
+}
+const f1 = (x) => (x === null || x === undefined ? "–" : (Math.round(x * 10) / 10).toString());
+const f0 = (x) => (x === null || x === undefined ? "–" : Math.round(x).toString());
+const strength = (r) => (r === null ? ["–", 0] : r >= -60 ? ["Very strong", 100] : r >= -72 ? ["Good", 75] : r >= -82 ? ["Weak", 45] : ["Very weak", 18]);
+const buzz = (p) => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (_) {} };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+
+/* ---------- tabs ---------- */
+function showView(v) {
+  state.view = v;
+  for (const id of ["live", "results", "setup"]) $("v-" + id).hidden = id !== v;
+  document.querySelectorAll("nav button").forEach((b) => { if (b.dataset.view === v) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
+  updateDock(); window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+
+/* ---------- status ---------- */
+function renderStatus() {
+  const items = [["Secure page (https)", window.isSecureContext], ["Bluetooth API", !!bt], ["Scan feature", !!(bt && bt.requestLEScan)], ["Keep-awake", "wakeLock" in navigator]];
+  const box = $("status"); box.textContent = "";
+  for (const [name, ok] of items) box.appendChild(el("span", "chip " + (ok ? "ok" : "bad"), (ok ? "✓ " : "✗ ") + name));
+  const help = $("help");
+  if (!window.isSecureContext) help.textContent = "This page is not secure. Open it from its https link.";
+  else if (!bt) help.textContent = "This browser has no Bluetooth API. Use Chrome on Android.";
+  else if (!bt.requestLEScan) help.textContent = "Scan feature is off. Open the Setup tab, enable the Chrome flag, relaunch Chrome, and reload.";
+  else help.textContent = "Ready. Location and Bluetooth must be on.";
+  const mini = $("mini"); mini.textContent = "";
+  const ok = !!(bt && bt.requestLEScan && window.isSecureContext);
+  mini.appendChild(el("span", "chip " + (ok ? "ok" : "bad"), ok ? "Ready" : "Setup needed"));
+}
+
+/* ---------- parsing ---------- */
+function parseAdv(e) {
+  const out = { key: e.device ? e.device.id : "unknown", name: e.name || (e.device && e.device.name) || "", rssi: e.rssi, tx: e.txPower, kinds: [], ib: null, ed: null, raw: [] };
+  if (e.manufacturerData) for (const [id, dv] of e.manufacturerData) {
+    const b = bytesOf(dv);
+    out.raw.push(`mfr 0x${id.toString(16).toUpperCase().padStart(4, "0")}: ${hex(b)}`);
+    if (id === 0x004c && b.length >= 23 && b[0] === 0x02 && b[1] === 0x15) {
+      out.kinds.push("iBeacon");
+      out.ib = { uuid: fmtUuid(hex(b.slice(2, 18))), major: (b[18] << 8) | b[19], minor: (b[20] << 8) | b[21], measured: (b[22] << 24) >> 24 };
+    }
+  }
+  if (e.serviceData) for (const [uuid, dv] of e.serviceData) {
+    const b = bytesOf(dv);
+    out.raw.push(`svc ${uuid.slice(4, 8).toUpperCase()}: ${hex(b)}`);
+    if (/^0000feaa/i.test(uuid) && b.length) {
+      const t = b[0];
+      if (t === 0x00 && b.length >= 18) { out.kinds.push("Eddystone-UID"); out.ed = { type: "UID", tx: (b[1] << 24) >> 24, ns: hex(b.slice(2, 12)), inst: hex(b.slice(12, 18)) }; }
+      else if (t === 0x10) { out.kinds.push("Eddystone-URL"); out.ed = { type: "URL", tx: (b[1] << 24) >> 24 }; }
+      else if (t === 0x20) out.kinds.push("Eddystone-TLM");
+      else if (t === 0x30) out.kinds.push("Eddystone-EID");
+      else out.kinds.push("Eddystone");
+    }
+  }
+  return out;
+}
+function onAdv(p) {
+  const now = Date.now();
+  let b = state.beacons.get(p.key);
+  if (!b) { b = { key: p.key, name: "", kinds: new Set(), ib: null, ed: null, raw: "", samples: [], count: 0, last: now, rssi: null }; state.beacons.set(p.key, b); }
+  if (p.name) b.name = p.name;
+  p.kinds.forEach((k) => b.kinds.add(k));
+  if (p.ib) b.ib = p.ib;
+  if (p.ed) b.ed = p.ed;
+  if (p.raw.length) b.raw = p.raw.join(" | ");
+  if (typeof p.rssi === "number") {
+    b.rssi = p.rssi; b.last = now; b.count++;
+    b.samples.push({ t: now, v: p.rssi });
+    if (state.rec && state.rec.key === p.key) state.rec.samples.push({ t: now, v: p.rssi });
+  }
+}
+function prune() { const cut = Date.now() - KEEP_MS; for (const b of state.beacons.values()) while (b.samples.length && b.samples[0].t < cut) b.samples.shift(); }
+const nameOf = (b) => b.name || (b.ib ? `iBeacon ${b.ib.major}/${b.ib.minor}` : b.ed && b.ed.ns ? `Eddystone ${b.ed.inst}` : [...b.kinds].join(" + ") || "beacon");
+function describe(b) {
+  const parts = [];
+  if (b.ib) parts.push(`iBeacon · UUID ${b.ib.uuid} · major ${b.ib.major} · minor ${b.ib.minor} · measured power ${b.ib.measured} dBm`);
+  if (b.ed) parts.push(b.ed.type === "UID" ? `Eddystone-UID · namespace ${b.ed.ns} · instance ${b.ed.inst} · power at 0 m ${b.ed.tx} dBm` : `Eddystone-${b.ed.type} · power at 0 m ${b.ed.tx} dBm`);
+  return parts;
+}
+
+/* ---------- scanning ---------- */
+async function acquireWake() {
+  try { if ("wakeLock" in navigator && !state.wake) { state.wake = await navigator.wakeLock.request("screen"); state.wake.addEventListener("release", () => { state.wake = null; }); } } catch (_) {}
+}
+const onRealAdv = (e) => onAdv(parseAdv(e));
+async function startScan() {
+  if (!bt || !bt.requestLEScan) return;
+  try {
+    state.scan = await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
+    bt.addEventListener("advertisementreceived", onRealAdv);
+    state.scanning = true; acquireWake(); setScanUi();
+  } catch (err) { $("scanInfo").textContent = "Could not start: " + (err && err.message ? err.message : err) + ". Check Location, Bluetooth and the Chrome flag."; }
+}
+function stopScan() {
+  try { if (state.scan && state.scan.active) state.scan.stop(); } catch (_) {}
+  if (bt) bt.removeEventListener("advertisementreceived", onRealAdv);
+  clearInterval(state.demoTimer); state.demoTimer = null;
+  state.scan = null; state.scanning = false;
+  if (state.wake) { try { state.wake.release(); } catch (_) {} state.wake = null; }
+  $("demoBox").hidden = true; setScanUi();
+}
+function setScanUi() {
+  $("start").disabled = state.scanning || !(bt && bt.requestLEScan);
+  $("stop").disabled = !state.scanning;
+  $("demo").disabled = state.scanning;
+  $("scanInfo").textContent = state.scanning ? "Scanning. Keep this page open and the screen on." : "Not scanning.";
+}
+function startDemo() {
+  state.scanning = true; setScanUi();
+  $("scanInfo").textContent = "Demo running with made-up beacons.";
+  $("demoBox").hidden = false;
+  const rnd = () => (Math.random() + Math.random() + Math.random() - 1.5) * 4;
+  state.demoTimer = setInterval(() => {
+    const base = -59 - 20 * Math.log10(Number($("demoDist").value));
+    if (Math.random() < 0.9) onAdv({ key: "demo-A", name: "DEMO-iBeacon", rssi: Math.round(base + rnd()), tx: 0, kinds: ["iBeacon"], ib: { uuid: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0", major: 1, minor: 7, measured: -59 }, ed: null, raw: ["mfr 0x004C: 0215e2c56db5dffb48d2b060d0f5a71096e000010007c5"] });
+    if (Math.random() < 0.5) onAdv({ key: "demo-B", name: "", rssi: Math.round(base - 14 + rnd()), tx: 0, kinds: ["Eddystone-UID"], ib: null, ed: { type: "UID", tx: -22, ns: "00112233445566778899", inst: "0a0b0c0d0e0f" }, raw: ["svc FEAA: 0000112233445566778899" + "0a0b0c0d0e0f"] });
+  }, 200);
+}
+$("demoDist").addEventListener("input", () => { $("demoDistVal").textContent = $("demoDist").value + " m"; });
+
+/* ---------- live view ---------- */
+function windowStats(b) { const now = Date.now(); return stats(b.samples.filter((s) => now - s.t <= WINDOW_MS).map((s) => s.v)); }
+function renderList() {
+  prune();
+  const filter = $("filter").value.trim().toLowerCase(), only = $("onlyBeacons").checked, now = Date.now();
+  const all = [...state.beacons.values()];
+  // Auto-track: if exactly one real beacon is around and the user has not chosen otherwise, track it.
+  const cands = all.filter((b) => b.kinds.size);
+  if (!state.tracked && !state.userUntracked && cands.length === 1) state.tracked = cands[0].key;
+  const rows = all.filter((b) => {
+    if (only && !b.kinds.size) return false;
+    return !filter || (b.name + " " + describe(b).join(" ") + " " + b.raw + " " + [...b.kinds].join(" ")).toLowerCase().includes(filter);
+  }).sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999));
+  const list = $("list"); list.textContent = "";
+  if (!rows.length) {
+    list.appendChild(el("p", "muted", state.scanning ? (only ? "No beacons heard yet. Move closer to the beacon, or untick “Only beacons” to see every Bluetooth device." : "Nothing heard yet.") : "Nothing yet. Press Start scan with the beacon switched on and close to the phone."));
+  }
+  for (const b of rows.slice(0, 10)) {
+    const st = windowStats(b), isT = state.tracked === b.key;
+    const card = el("div", "beacon" + (isT ? " tracked" : ""));
+    const top = el("div", "row");
+    top.appendChild(el("span", "big", b.rssi === null ? "–" : String(b.rssi)));
+    top.appendChild(el("span", "muted", "dBm"));
+    top.appendChild(el("span", "grow"));
+    for (const k of (b.kinds.size ? b.kinds : ["other device"])) top.appendChild(el("span", "chip", k));
+    card.appendChild(top);
+    const btn = el("button", isT ? "primary" : "", isT ? "Tracking ✓ (tap to stop)" : "Track this beacon");
+    btn.addEventListener("click", () => { if (isT) { state.tracked = null; state.userUntracked = true; } else { state.tracked = b.key; state.userUntracked = false; } renderList(); });
+    card.appendChild(btn);
+    if (b.name) card.appendChild(el("div", "muted", "Name: " + b.name));
+    for (const line of describe(b)) card.appendChild(el("div", "muted", line));
+    if (b.raw) card.appendChild(el("div", "mono muted", b.raw));
+    card.appendChild(el("div", "muted", `10 s avg ${f1(st && st.mean)} · ${f1((st ? st.n : 0) / (WINDOW_MS / 1000))} packets/s`));
+    list.appendChild(card);
+  }
+  if (rows.length > 10) list.appendChild(el("p", "muted", `${rows.length - 10} more not shown. Use the filter to narrow the list.`));
+  renderMeter(); updateDock();
+}
+function renderMeter() {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null;
+  $("meterCard").hidden = !b;
+  if (!b) return;
+  const age = (Date.now() - b.last) / 1000, lost = age > 3, st = windowStats(b);
+  const [lab, pct] = strength(lost ? null : b.rssi);
+  $("mKind").textContent = "Tracking · " + nameOf(b);
+  $("mAge").textContent = lost ? `Signal lost ${f0(age)} s ago` : "Hearing it";
+  $("mNum").textContent = lost || b.rssi === null ? "–" : String(b.rssi);
+  $("mLab").textContent = lost ? "Not heard right now" : lab;
+  $("mBar").style.width = pct + "%";
+  const kv = $("mKv"); kv.textContent = "";
+  for (const t of [`avg ${f1(st && st.mean)}`, `median ${f0(st && st.median)}`, `min ${f0(st && st.min)}`, `max ${f0(st && st.max)}`, `${f1((st ? st.n : 0) / (WINDOW_MS / 1000))}/s`]) kv.appendChild(el("span", "", t));
+}
+
+/* ---------- recorder and dock ---------- */
+function updateDock() {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null;
+  const show = state.view === "live" && (state.scanning || state.rec);
+  $("dock").hidden = !show;
+  const lost = b ? Date.now() - b.last > 3000 : true;
+  $("dNum").textContent = b && !lost && b.rssi !== null ? String(b.rssi) : "–";
+  $("dLab").textContent = b ? (lost ? "not heard" : "dBm") : "no beacon";
+  if (state.rec) return;
+  $("rec").disabled = !b || !state.scanning;
+  $("rec").textContent = b ? `Record ${state.secs} s${state.spot ? " · " + state.spot : ""}` : "Track a beacon first";
+  $("dockBar").style.width = "0";
+}
+function startRec() {
+  const b = state.beacons.get(state.tracked); if (!b) return;
+  const ms = state.secs * 1000;
+  state.rec = { key: b.key, start: Date.now(), ms, samples: [], meta: { dist: ($("dist").value.trim() || state.spot), place: state.place, note: $("note").value.trim(), label: nameOf(b) } };
+  $("rec").disabled = true; acquireWake(); buzz(60);
+}
+function tickRec() {
+  const r = state.rec; if (!r) return;
+  const e = Date.now() - r.start;
+  $("dockBar").style.width = Math.min(100, (e / r.ms) * 100) + "%";
+  $("rec").textContent = `Recording… ${Math.max(0, Math.ceil((r.ms - e) / 1000))} s · ${r.samples.length} packets`;
+  if (e >= r.ms) finishRec();
+}
+function finishRec() {
+  const r = state.rec; state.rec = null;
+  r.samples = r.samples.filter((s) => s.t - r.start < r.ms);
+  const st = stats(r.samples.map((s) => s.v));
+  const secs = Math.round(r.ms / 1000);
+  const buckets = new Set(r.samples.map((s) => Math.floor((s.t - r.start) / 1000)));
+  state.results.push({ time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }), beacon: r.meta.label, dist: r.meta.dist, place: r.meta.place, note: r.meta.note,
+    n: st ? st.n : 0, mean: st && st.mean, median: st && st.median, p10: st && st.p10, min: st && st.min, max: st && st.max, sd: st && st.sd, pps: st ? st.n / secs : 0, heard: Math.round((buckets.size / secs) * 100) });
+  saveResults(); renderResults(); buzz([120, 80, 120]);
+  const last = state.results[state.results.length - 1];
+  $("rec").textContent = st ? `Saved · typical ${f0(last.median)} dBm · heard ${last.heard}%` : "Nothing heard. Saved as a miss.";
+  setTimeout(() => { if (!state.rec) updateDock(); }, 2500);
+  $("dockBar").style.width = "0";
+}
+
+/* ---------- spot chips, segmented controls ---------- */
+function buildSpots() {
+  const box = $("spotPicks"); box.textContent = "";
+  for (const s of SPOTS) {
+    const b = el("button", "", s); b.type = "button"; b.setAttribute("aria-pressed", state.spot === s ? "true" : "false");
+    b.addEventListener("click", () => { state.spot = state.spot === s ? "" : s; $("dist").value = ""; buildSpots(); updateDock(); });
+    box.appendChild(b);
+  }
+}
+$("dist").addEventListener("input", () => { if ($("dist").value) { state.spot = ""; buildSpots(); } updateDock(); });
+function seg(id, key, num) {
+  $(id).querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    state[key] = num ? Number(b.dataset.v) : b.dataset.v;
+    $(id).querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
+    updateDock();
+  }));
+}
+seg("placeSeg", "place", false); seg("secsSeg", "secs", true);
+
+/* ---------- results ---------- */
+const KEY = "ble-test-results-v1";
+function saveResults() { try { localStorage.setItem(KEY, JSON.stringify(state.results)); } catch (_) {} }
+function loadResults() { try { const v = JSON.parse(localStorage.getItem(KEY) || "[]"); if (Array.isArray(v)) state.results = v; } catch (_) {} }
+function renderResults() {
+  const box = $("resList"); box.textContent = "";
+  state.results.slice().reverse().forEach((r, i) => {
+    const idx = state.results.length - 1 - i;
+    const c = el("div", "res");
+    const head = el("div", "head");
+    const t = el("div"); t.appendChild(el("b", "", r.dist || "(no spot)")); t.appendChild(el("div", "muted", `${r.place} · ${r.beacon} · ${r.time}`));
+    const x = el("button", "x small", "✕"); x.setAttribute("aria-label", "Delete this result");
+    x.addEventListener("click", () => { state.results.splice(idx, 1); saveResults(); renderResults(); });
+    head.append(t, x); c.appendChild(head);
+    const three = el("div", "three");
+    for (const [v, l] of [[f0(r.median), "typical dBm"], [f0(r.p10), "weak 10% dBm"], [r.heard + "%", "heard"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l)); three.appendChild(d); }
+    c.appendChild(three);
+    c.appendChild(el("div", "muted", `avg ${f1(r.mean)} · min ${f0(r.min)} · max ${f0(r.max)} · spread ${f1(r.sd)} · ${r.n} packets (${f1(r.pps)}/s)${r.note ? " · " + r.note : ""}`));
+    box.appendChild(c);
+  });
+  $("noResults").hidden = state.results.length > 0;
+  for (const id of ["share", "download", "copy", "clear"]) $(id).disabled = state.results.length === 0;
+  $("resTab").textContent = state.results.length ? `Results (${state.results.length})` : "Results";
+}
+const safe = (s) => { s = String(s ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
+function csv() {
+  const head = ["time", "beacon", "spot", "phone", "avg_dbm", "median_dbm", "weak10_dbm", "min_dbm", "max_dbm", "spread_dbm", "packets", "packets_per_s", "seconds_heard_pct", "note"];
+  const num = (x) => (x === null || x === undefined ? "" : Math.round(x * 100) / 100);
+  return [head.join(","), ...state.results.map((r) => [safe(r.time), safe(r.beacon), safe(r.dist), safe(r.place), num(r.mean), num(r.median), num(r.p10), num(r.min), num(r.max), num(r.sd), r.n, num(r.pps), r.heard, safe(r.note)].join(","))].join("\n");
+}
+const fileName = () => "ble-range-test-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + ".csv";
+const say = (m) => { $("resMsg").textContent = m; };
+$("download").addEventListener("click", () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv()], { type: "text/csv" })); a.download = fileName(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); say("Downloaded."); });
+$("copy").addEventListener("click", async () => { try { await navigator.clipboard.writeText(csv()); say("CSV copied."); } catch (_) { say("Could not copy. Use Download."); } });
+$("share").addEventListener("click", async () => {
+  try {
+    const file = new File([csv()], fileName(), { type: "text/csv" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: "BLE range test" });
+    else await navigator.share({ title: "BLE range test", text: csv() });
+  } catch (e) { if (e && e.name !== "AbortError") say("Sharing is not available here. Use Download or Copy."); }
+});
+$("clear").addEventListener("click", () => { if (confirm("Delete all results on this phone?")) { state.results = []; saveResults(); renderResults(); } });
+
+/* ---------- wiring ---------- */
+$("start").addEventListener("click", startScan);
+$("stop").addEventListener("click", stopScan);
+$("demo").addEventListener("click", startDemo);
+$("rec").addEventListener("click", startRec);
+$("filter").addEventListener("input", renderList);
+$("onlyBeacons").addEventListener("change", renderList);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
+
+loadResults(); buildSpots(); renderStatus(); renderResults(); setScanUi(); renderList();
+setInterval(renderList, 500);
+setInterval(tickRec, 200);
+</script>
+</body>
+</html>
