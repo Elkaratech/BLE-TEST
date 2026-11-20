@@ -95,8 +95,10 @@
       <p class="muted" id="scanInfo" style="margin:10px 0 0">Not scanning.</p>
       <p class="muted" id="help" style="margin:6px 0 0"></p>
       <div class="row" style="margin-top:8px">
-        <button id="demo" class="small">Try demo (no beacon)</button>
+        <button id="pick" class="grow">Backup: pick a device</button>
+        <button id="demo" class="small">Demo</button>
       </div>
+      <p class="muted" style="margin:6px 0 0">If <b>Start scan</b> finds nothing, tap <b>Backup</b>. Chrome shows a list of nearby Bluetooth devices. Pick the beacon, and this page will read its signal.</p>
       <div id="demoBox" hidden style="margin-top:10px">
         <label class="l" for="demoDist">Demo distance: <b id="demoDistVal">3 m</b></label>
         <input id="demoDist" type="range" min="1" max="15" value="3" step="1" style="width:100%;height:36px">
@@ -211,7 +213,7 @@
 const $ = (id) => document.getElementById(id);
 const bt = navigator.bluetooth;
 const state = {
-  beacons: new Map(), tracked: null, userUntracked: false,
+  beacons: new Map(), tracked: null, userUntracked: false, pickers: [], pickAbort: null,
   scan: null, demoTimer: null, scanning: false,
   rec: null, results: [], wake: null, view: "live",
   place: "in hand", secs: 30, spot: "",
@@ -249,16 +251,16 @@ document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click
 
 /* ---------- status ---------- */
 function renderStatus() {
-  const items = [["Secure page (https)", window.isSecureContext], ["Bluetooth API", !!bt], ["Scan feature", !!(bt && bt.requestLEScan)], ["Keep-awake", "wakeLock" in navigator]];
+  const items = [["Secure page (https)", window.isSecureContext], ["Bluetooth API", !!bt], ["Scan feature", !!(bt && bt.requestLEScan)], ["Backup device picker", !!bt], ["Keep-awake", "wakeLock" in navigator]];
   const box = $("status"); box.textContent = "";
   for (const [name, ok] of items) box.appendChild(el("span", "chip " + (ok ? "ok" : "bad"), (ok ? "✓ " : "✗ ") + name));
   const help = $("help");
   if (!window.isSecureContext) help.textContent = "This page is not secure. Open it from its https link.";
   else if (!bt) help.textContent = "This browser has no Bluetooth API. Use Chrome on Android.";
-  else if (!bt.requestLEScan) help.textContent = "Scan feature is off. Open the Setup tab, enable the Chrome flag, relaunch Chrome, and reload.";
+  else if (!bt.requestLEScan) help.textContent = "Start scan is off. Use Backup: pick a device, or open Setup to enable the Chrome flag.";
   else help.textContent = "Ready. Location and Bluetooth must be on.";
   const mini = $("mini"); mini.textContent = "";
-  const ok = !!(bt && bt.requestLEScan && window.isSecureContext);
+  const ok = !!(bt && window.isSecureContext);
   mini.appendChild(el("span", "chip " + (ok ? "ok" : "bad"), ok ? "Ready" : "Setup needed"));
 }
 
@@ -328,6 +330,8 @@ function stopScan() {
   try { if (state.scan && state.scan.active) state.scan.stop(); } catch (_) {}
   if (bt) bt.removeEventListener("advertisementreceived", onRealAdv);
   clearInterval(state.demoTimer); state.demoTimer = null;
+  if (state.pickAbort) { try { state.pickAbort.abort(); } catch (_) {} state.pickAbort = null; }
+  state.pickers = [];
   state.scan = null; state.scanning = false;
   if (state.wake) { try { state.wake.release(); } catch (_) {} state.wake = null; }
   $("demoBox").hidden = true; setScanUi();
@@ -335,9 +339,27 @@ function stopScan() {
 function setScanUi() {
   $("start").disabled = state.scanning || !(bt && bt.requestLEScan);
   $("stop").disabled = !state.scanning;
-  $("demo").disabled = state.scanning;
+  $("demo").disabled = state.scanning && !state.demoTimer ? true : !!state.demoTimer;
+  $("pick").disabled = !bt;
   $("scanInfo").textContent = state.scanning ? "Scanning. Keep this page open and the screen on." : "Not scanning.";
 }
+/* Backup route: Chrome\'s own device chooser, then read that device\'s advertisements. Works without the scanning flag. */
+async function startPicker() {
+  if (!bt) return;
+  try {
+    const dev = await bt.requestDevice({ acceptAllDevices: true, optionalServices: [0xfeaa], optionalManufacturerData: [0x004c, 0x0ea5] });
+    if (!state.pickAbort) state.pickAbort = new AbortController();
+    dev.addEventListener("advertisementreceived", onRealAdv);
+    state.pickers.push(dev);
+    await dev.watchAdvertisements({ signal: state.pickAbort.signal });
+    state.scanning = true; acquireWake(); setScanUi();
+    $("scanInfo").textContent = "Reading " + (dev.name || "the chosen device") + ". Keep this page open and the screen on.";
+  } catch (err) {
+    const m = err && err.name === "NotFoundError" ? "No device was chosen. Move closer to the beacon and try again." : (err && err.message ? err.message : String(err));
+    $("scanInfo").textContent = "Backup scan: " + m;
+  }
+}
+
 function startDemo() {
   state.scanning = true; setScanUi();
   $("scanInfo").textContent = "Demo running with made-up beacons.";
@@ -511,6 +533,7 @@ $("clear").addEventListener("click", () => { if (confirm("Delete all results on 
 $("start").addEventListener("click", startScan);
 $("stop").addEventListener("click", stopScan);
 $("demo").addEventListener("click", startDemo);
+$("pick").addEventListener("click", startPicker);
 $("rec").addEventListener("click", startRec);
 $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
