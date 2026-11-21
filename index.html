@@ -170,7 +170,7 @@
       </div>
       <label class="l" style="margin-top:10px">Room 29 checking</label>
       <div class="seg" id="presetSeg" role="group" aria-label="Checking style">
-        <button data-v="strict" aria-pressed="true">Strict: corridor out</button><button data-v="tolerant" aria-pressed="false">Tolerant: weak seats in</button>
+        <button data-v="strict" aria-pressed="true">Room 29 setting</button><button data-v="tolerant" aria-pressed="false">Tolerant: weak seats in</button>
       </div>
       <div id="tolWrap" hidden>
         <label class="l" style="margin-top:10px">Allowed deviation for weak signals</label>
@@ -180,7 +180,7 @@
       </div>
       <p class="muted" id="fenceWhy" style="margin:8px 0"></p>
       <div id="fenceCheck" style="margin:8px 0"></div>
-      <button id="fReset" class="small">Reset to Strict</button>
+      <button id="fReset" class="small">Reset to the Room 29 setting (-72 / -75)</button>
       <details style="margin-top:10px"><summary>The survey this is built from</summary><div id="surveyBox" class="muted" style="margin-top:6px"></div></details>
       <h2 style="margin-top:16px">Test walk</h2>
       <p class="muted" style="margin-top:0">Stand at each spot, tap <b>Test</b>, and stay still for 15 seconds. The page checks whether the geofence judged it correctly. Add the outside spots you can reach.</p>
@@ -366,7 +366,7 @@ const SURVEY = [
   { n: "Bottom-left", r: [-79, -79, -76, -83], set: -75 },   // typical set to -75 by the team
   { n: "Bottom-middle", r: [-72, -76, -72] }, { n: "Bottom-right", r: [-72, -64, -65, -64, -70] },
 ];
-const FENCE_TOL_DEFAULT = 6, FENCE_VER = 4, FENCE_HYST = 3, STRICT_ENTER = -70, STRICT_EXIT = -72, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
+const FENCE_TOL_DEFAULT = 6, FENCE_VER = 5, FENCE_HYST = 3, STRICT_ENTER = -72, STRICT_EXIT = -75, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
 const OUTSIDE_SURVEY = [
   { n: "Corridor, just outside the door", r: [-71, -69, -70, -72] }, { n: "Corridor, middle of the wall", r: [-80] }, { n: "Corridor, beside the door (3rd point)", r: [-74, -74, -74] },
   { n: "Next class A, bottom-right", r: [-83, -83, -81] }, { n: "Next class A, bottom-middle", r: [-83, -82, -81] }, { n: "Next class A, bottom-left", r: [-84, -85, -85] },
@@ -379,7 +379,7 @@ function surveyDefaults() {
   const enter = Math.round(worst - fence.tol);
   return { worst, worstName, enter, exit: enter - FENCE_HYST };
 }
-const fence = { preset: "strict", tol: FENCE_TOL_DEFAULT, enter: -70, exit: -72, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
+const fence = { preset: "strict", tol: FENCE_TOL_DEFAULT, enter: -72, exit: -75, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
 const defaultSpots = () => [...SURVEY.map((p) => ({ name: p.n, expect: "inside" })), ...OUTSIDE_SURVEY.map((p) => ({ name: p.n, expect: "outside" }))];
 function loadFence() {
   const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; fence.spots = defaultSpots();
@@ -863,7 +863,7 @@ function renderFenceStatic() {
   $("tolWrap").hidden = fence.preset !== "tolerant";
   const lost = SURVEY.filter((p) => surveyTyp(p) < fence.enter).map((p) => p.n);
   $("fenceWhy").textContent = fence.preset === "strict"
-    ? `Strict checking: entry level ${fence.enter} dBm, leave level ${fence.exit} dBm. The corridor outside Room 29 reads about -70 to -80, so it stays mostly outside, but the corridor by the door (about -70) is close to this level. Spots that read weaker than the entry level are judged outside. On your survey that is ${lost.length ? lost.join(", ") : "none"}. Use Wider to catch more seats, one dB at a time, and watch the check below for corridor spots turning inside.`
+    ? `Room 29 setting: entry level ${fence.enter} dBm, leave level ${fence.exit} dBm${fence.enter === STRICT_ENTER && fence.exit === STRICT_EXIT ? " (the setting the team tested and finalised)" : " (changed from the finalised -72 / -75)"}. On the paper survey, spots that read weaker than the entry level are judged outside: ${lost.length ? lost.join(", ") : "none"}. You can still tune it with Wider and Stricter, or by typing the levels. Watch the check below for corridor spots turning inside.`
     : `Tolerant checking: the weakest typical spot in Room 29 is ${d.worstName} at ${f0(d.worst)} dBm. A signal up to ${fence.tol} dB weaker than that still counts as inside, so the entry level is ${d.enter} dBm and the leave level ${d.exit} dBm. This keeps weak seats inside but lets in part of the corridor. The check below shows the trade-off.`;
   const box = $("surveyBox"); box.textContent = "";
   box.appendChild(el("b", "", "Inside Room 29"));
