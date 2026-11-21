@@ -103,7 +103,7 @@
   <!-- ============ LIVE ============ -->
   <div class="view" id="v-live">
     <div class="seg" id="modeSeg" role="group" aria-label="Test mode">
-      <button data-v="default" aria-pressed="true">Default test</button><button data-v="circle" aria-pressed="false">Circle test</button>
+      <button data-v="default" aria-pressed="true">Default</button><button data-v="circle" aria-pressed="false">Circle</button><button data-v="fence" aria-pressed="false">Geofence</button>
     </div>
     <section class="card" aria-label="Scan">
       <div class="row">
@@ -155,6 +155,30 @@
       <div class="bar" style="margin-top:10px" aria-hidden="true"><i id="circBar"></i></div>
       <p class="muted" id="circMsg" role="status" style="margin:6px 0 0"></p>
       <div id="circResult" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card" id="fenceCard" aria-label="Room 29 geofence" hidden>
+      <h2>Room 29 geofence</h2>
+      <p class="muted" style="margin-top:0">Room 29 is 8.5 m × 10.5 m, with the beacon on the ceiling at the centre (ceiling 4 to 5 m). Track that beacon. You are <b>inside</b> when the smoothed signal stays at or above the entry level for about 2 seconds, and <b>outside</b> when it stays below the leave level for about 4 seconds.</p>
+      <div class="zone none" id="fenceBanner" role="status">Room 29: track the beacon<small>Start the scan, then tap Track</small></div>
+      <div class="row" style="margin-top:10px">
+        <div class="grow"><label class="l" for="fEnter">Entry level (dBm)</label><input id="fEnter" type="text" inputmode="decimal" autocomplete="off"></div>
+        <div class="grow"><label class="l" for="fExit">Leave level (dBm)</label><input id="fExit" type="text" inputmode="decimal" autocomplete="off"></div>
+      </div>
+      <p class="muted" id="fenceWhy" style="margin:8px 0"></p>
+      <div id="fenceCheck" style="margin:8px 0"></div>
+      <button id="fReset" class="small">Reset to the survey values</button>
+      <details style="margin-top:10px"><summary>The survey this is built from</summary><div id="surveyBox" class="muted" style="margin-top:6px"></div></details>
+      <h2 style="margin-top:16px">Test walk</h2>
+      <p class="muted" style="margin-top:0">Stand at each spot, tap <b>Test</b>, and stay still for 15 seconds. The page checks whether the geofence judged it correctly. Add the outside spots you can reach.</p>
+      <div class="bar" style="margin:6px 0" aria-hidden="true"><i id="fenceBar"></i></div>
+      <p class="muted" id="fenceMsg" role="status" style="margin:0 0 8px"></p>
+      <div id="fenceSpots" style="display:grid;gap:8px"></div>
+      <div class="row" style="margin-top:10px">
+        <div class="grow"><label class="l" for="fSpotName">Add a spot</label><input id="fSpotName" type="text" placeholder="e.g. Corridor, 2 m past the door" autocomplete="off"></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="fAddOut" class="small grow">Add as OUTSIDE</button><button id="fAddIn" class="small grow">Add as INSIDE</button></div>
+      <div id="fenceSummary" style="margin-top:12px"></div>
     </section>
 
     <section class="card" aria-label="Distance estimate settings">
@@ -322,6 +346,32 @@ const rawZone = (m) => { if (m === null) return "none"; const t = thr(); return 
 const ZONE_TXT = { inside: "INSIDE the circle", approaching: "Approaching (in the outer ring)", outside: "Outside", none: "No signal" };
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
 
+/* ---------- room geofence: built from the classroom survey, then checked by a test walk ---------- */
+const SURVEY = [
+  { n: "Top-left", r: [-68, -64, -61] }, { n: "Top-middle", r: [-59, -61, -66] }, { n: "Top-right (door side)", r: [-63, -65, -65] },
+  { n: "Left-middle", r: [-77, -73, -71] }, { n: "Centre", r: [-59, -65, -59] }, { n: "Right-middle", r: [-65, -80, -71] },
+  { n: "Bottom-left", r: [-79, -79, -76, -83], set: -75 },   // typical set to -75 by the team
+  { n: "Bottom-middle", r: [-72, -76, -72] }, { n: "Bottom-right", r: [-72, -64, -65, -64, -70] },
+];
+const SURVEY_MARGIN = 5, FENCE_HYST = 3, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
+const OUTSIDE_SURVEY = [
+  { n: "Corridor, just outside the door", r: [-71, -69, -70, -72] }, { n: "Corridor, middle of the wall", r: [-80] }, { n: "Corridor, beside the door (3rd point)", r: [-74, -74, -74] },
+  { n: "Next class A, bottom-right", r: [-83, -83, -81] }, { n: "Next class A, bottom-middle", r: [-83, -82, -81] }, { n: "Next class A, bottom-left", r: [-84, -85, -85] },
+  { n: "Next class B, bottom-right", r: [-74, -76] }, { n: "Next class B, bottom-middle", r: [-77, -76] }, { n: "Next class B, bottom-left", r: [-80, -78, -77] },
+];
+const surveyTyp = (p) => (p.set !== undefined ? p.set : median(p.r));
+function surveyDefaults() {
+  const typ = SURVEY.map(surveyTyp), worst = Math.min(...typ), enter = Math.round(worst - SURVEY_MARGIN);
+  return { worst, worstName: SURVEY[typ.indexOf(worst)].n, enter, exit: enter - FENCE_HYST };
+}
+const fence = { enter: -80, exit: -83, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
+const defaultSpots = () => [...SURVEY.map((p) => ({ name: p.n, expect: "inside" })), ...OUTSIDE_SURVEY.map((p) => ({ name: p.n, expect: "outside" }))];
+function loadFence() {
+  const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; fence.spots = defaultSpots();
+  try { const v = JSON.parse(localStorage.getItem(FENCE_KEY) || "null"); if (v) { if (typeof v.enter === "number") fence.enter = v.enter; if (typeof v.exit === "number") fence.exit = v.exit; if (Array.isArray(v.spots) && v.spots.length) fence.spots = v.spots; if (Array.isArray(v.results)) fence.results = v.results; } } catch (_) {}
+}
+const saveFence = () => { try { localStorage.setItem(FENCE_KEY, JSON.stringify({ enter: fence.enter, exit: fence.exit, spots: fence.spots, results: fence.results })); } catch (_) {} };
+
 /* ---------- diagnostics ---------- */
 const logs = [];
 function log(m) { logs.push(new Date().toLocaleTimeString("en-IN") + "  " + m); if (logs.length > 60) logs.shift(); renderDiag(); }
@@ -436,6 +486,7 @@ function onAdv(p) {
     b.samples.push({ t: now, v: p.rssi });
     if (state.rec && state.rec.key === p.key) state.rec.samples.push({ t: now, v: p.rssi });
     if (circ.test && circ.test.key === p.key) circ.test.pkts.push({ t: now, v: p.rssi });
+    if (fence.test && fence.test.key === p.key) fence.test.pkts.push({ t: now, v: p.rssi });
   }
 }
 function prune() { const cut = Date.now() - KEEP_MS; for (const b of state.beacons.values()) while (b.samples.length && b.samples[0].t < cut) b.samples.shift(); }
@@ -625,6 +676,7 @@ function renderList() {
     ib.appendChild(wrap);
   }
   renderMeter(); updateDock();
+  if (state.mode === "fence" && !fence.test) { const dis = !state.tracked || !state.scanning; const bs = $("fenceSpots").querySelectorAll("button.primary"); if (bs.length && bs[0].disabled !== dis) renderFenceSpots(); }
 }
 function renderMeter() {
   const b = state.tracked ? state.beacons.get(state.tracked) : null;
@@ -749,6 +801,140 @@ function fillCircle(box) {
   box.appendChild(cp);
 }
 
+/* ---------- geofence logic ---------- */
+function fenceSmoothed() {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null;
+  if (!b || !state.scanning) return null;
+  const now = Date.now(), w = b.samples.filter((s) => now - s.t <= FENCE_SMOOTH_MS).map((s) => s.v);
+  return w.length >= 3 ? median(w) : null;
+}
+function tickFence() {
+  if (state.mode !== "fence" && !fence.test) return;
+  const m = fenceSmoothed(), now = Date.now();
+  let target;
+  if (m === null) target = "unknown"; else if (fence.zone === "inside") target = m >= fence.exit ? "inside" : "outside"; else target = m >= fence.enter ? "inside" : "outside";
+  if (target === fence.zone) fence.pending = null;
+  else if (fence.pending !== target) { fence.pending = target; fence.since = now; }
+  else if (now - fence.since >= (target === "inside" ? 2000 : 4000)) { fence.zone = target; fence.pending = null; if (target === "inside") buzz([100, 60, 100]); }
+  if (fence.test) {
+    const T = fence.test, e = now - T.start;
+    if (e >= T.ms) finishFenceTest();
+    else { $("fenceBar").style.width = Math.min(100, (e / T.ms) * 100) + "%"; $("fenceMsg").textContent = `Testing "${fence.spots[T.i].name}"… ${Math.max(0, Math.ceil((T.ms - e) / 1000))} s left. Stay still.`; }
+  }
+  renderFenceBanner(m);
+}
+function renderFenceBanner(m) {
+  const b = state.tracked ? state.beacons.get(state.tracked) : null, ban = $("fenceBanner");
+  ban.className = "zone " + (fence.zone === "inside" ? "inside" : fence.zone === "outside" ? "" : "none");
+  ban.textContent = !b ? "Room 29: track the beacon" : fence.zone === "inside" ? "INSIDE Room 29" : fence.zone === "outside" ? "OUTSIDE Room 29" : "Room 29: no steady signal";
+  ban.appendChild(el("small", "", !b ? "Start the scan, then tap Track" : m === null ? "Fewer than 3 packets in the last 6 seconds" : `${f0(m)} dBm · ${m >= fence.enter ? f0(m - fence.enter) + " dB above the entry level" : f0(fence.enter - m) + " dB below the entry level" + (fence.zone === "inside" ? ` (stays inside until ${fence.exit} dBm)` : "")}`));
+}
+function renderFenceStatic() {
+  const d = surveyDefaults();
+  $("fEnter").value = String(fence.enter); $("fExit").value = String(fence.exit);
+  $("fenceWhy").textContent = `Survey values: the weakest typical spot is ${d.worstName} at ${f0(d.worst)} dBm. Entry level = that minus a ${SURVEY_MARGIN} dB margin = ${d.enter} dBm. Leave level is ${FENCE_HYST} dB lower, so a student standing at the edge does not flicker in and out. These come from the inside survey. The check above and the test walk below show how they do against the outside.`;
+  const box = $("surveyBox"); box.textContent = "";
+  box.appendChild(el("b", "", "Inside Room 29"));
+  for (const p of SURVEY) box.appendChild(el("div", "", `${p.n}: ${p.r.join(", ")} → typical ${f0(surveyTyp(p))}${p.set !== undefined ? " (set by you)" : ""}`));
+  const ob = el("b", "", "Outside Room 29"); ob.style.display = "block"; ob.style.marginTop = "8px"; box.appendChild(ob);
+  for (const p of OUTSIDE_SURVEY) box.appendChild(el("div", "", `${p.n}: ${p.r.join(", ")} → typical ${f0(surveyTyp(p))}`));
+  renderFenceCheck(); renderFenceSpots(); renderFenceSummary();
+}
+/* What the chosen entry level would have done on the Room 29 survey (typical value of each surveyed point). */
+function renderFenceCheck() {
+  const box = $("fenceCheck"); box.textContent = "";
+  const ins = SURVEY.map((p) => ({ n: p.n, v: surveyTyp(p) })), out = OUTSIDE_SURVEY.map((p) => ({ n: p.n, v: surveyTyp(p) }));
+  const score = (lvl) => ins.filter((x) => x.v >= lvl).length + out.filter((x) => x.v < lvl).length;
+  const insOk = ins.filter((x) => x.v >= fence.enter).length, outOk = out.filter((x) => x.v < fence.enter).length;
+  let best = -100, bestScore = -1; for (let l = -90; l <= -55; l++) { const sc = score(l); if (sc > bestScore) { bestScore = sc; best = l; } }
+  const weakIn = ins.reduce((a, b) => (b.v < a.v ? b : a)), strongOut = out.reduce((a, b) => (b.v > a.v ? b : a)), gap = weakIn.v - strongOut.v;
+  box.appendChild(el("p", "", `On your survey, entry level ${fence.enter} dBm judges ${insOk} of ${ins.length} inside spots and ${outOk} of ${out.length} outside spots correctly.`));
+  box.appendChild(el("p", "muted", `Best single level on the survey: ${best} dBm (${bestScore} of ${ins.length + out.length} correct).`));
+  if (best !== fence.enter) { const ub = el("button", "small", `Use ${best} dBm as the entry level`); ub.addEventListener("click", () => { fence.enter = best; fence.exit = best - FENCE_HYST; saveFence(); renderFenceStatic(); }); box.appendChild(ub); }
+  box.appendChild(el("p", gap > 0 ? "muted" : "", gap > 0
+    ? `Gap between the weakest inside spot (${weakIn.n}, ${f0(weakIn.v)}) and the strongest outside spot (${strongOut.n}, ${f0(strongOut.v)}): ${f0(gap)} dB.`
+    : `Warning: the weakest inside spot (${weakIn.n}, ${f0(weakIn.v)} dBm) is weaker than the strongest outside spot (${strongOut.n}, ${f0(strongOut.v)} dBm). No single level separates Room 29 from the corridor by the door. Use the test walk below to see how it behaves, and plan a second beacon.`));
+}
+function renderFenceSpots() {
+  const box = $("fenceSpots"); box.textContent = "";
+  fence.spots.forEach((sp, i) => {
+    const r = fence.results.find((x) => x.name === sp.name);
+    const row = el("div", "res");
+    const head = el("div", "head"); const t = el("div");
+    t.appendChild(el("b", "", sp.name));
+    t.appendChild(el("div", "muted", r ? `tested ${r.at} · typical ${f0(r.median)} dBm · heard ${r.heard}%` : "not tested yet"));
+    const chips = el("div", "row"); chips.style.flexWrap = "nowrap";
+    chips.appendChild(el("span", "chip" + (sp.expect === "inside" ? " ok" : ""), "should be " + sp.expect));
+    if (r) chips.appendChild(el("span", "chip" + (r.pass ? " ok" : " bad"), r.pass ? "✓ correct" : "✗ judged " + r.observed));
+    head.append(t, chips); row.appendChild(head);
+    const acts = el("div", "row");
+    const test = el("button", "primary grow", "Test here (15 s)"); test.disabled = !state.tracked || !state.scanning || !!fence.test;
+    test.addEventListener("click", () => startFenceTest(i));
+    const del = el("button", "small", "Remove"); del.addEventListener("click", () => { if (fence.test) return; fence.spots.splice(i, 1); fence.results = fence.results.filter((x) => x.name !== sp.name); saveFence(); renderFenceStatic(); });
+    acts.append(test, del); row.appendChild(acts);
+    box.appendChild(row);
+  });
+}
+function startFenceTest(i) {
+  if (!state.tracked || !state.scanning || fence.test) return;
+  fence.test = { i, key: state.tracked, start: Date.now(), ms: FENCE_TEST_MS, pkts: [] };
+  acquireWake(); buzz(60); renderFenceSpots();
+}
+function finishFenceTest() {
+  const T = fence.test; fence.test = null; $("fenceBar").style.width = "0%";
+  const sp = fence.spots[T.i]; if (!sp) return;
+  const pk = T.pkts.filter((q) => q.t - T.start < T.ms), vals = pk.map((q) => q.v), st = stats(vals);
+  const heard = Math.round((new Set(pk.map((q) => Math.floor((q.t - T.start) / 1000))).size / (T.ms / 1000)) * 100);
+  const observed = !st || st.n < 5 ? "unknown" : st.median >= fence.enter ? "inside" : "outside";
+  const res = { name: sp.name, expect: sp.expect, observed, pass: observed === sp.expect, median: st && st.median, p10: st && st.p10, p90: st && st.p90, n: st ? st.n : 0, heard,
+    at: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+  fence.results = fence.results.filter((x) => x.name !== sp.name); fence.results.push(res);
+  saveFence(); buzz(res.pass ? [120, 80, 120] : [400]);
+  $("fenceMsg").textContent = `${sp.name}: ${res.pass ? "correct" : "WRONG, judged " + observed} (typical ${f0(res.median)} dBm, entry level ${fence.enter}).`;
+  renderFenceSpots(); renderFenceSummary();
+}
+function fenceStats() {
+  const rs = fence.results, ins = rs.filter((r) => r.expect === "inside"), out = rs.filter((r) => r.expect === "outside");
+  const insOk = ins.filter((r) => r.pass).length, outOk = out.filter((r) => r.pass).length;
+  const insP10 = ins.filter((r) => r.p10 !== null && r.p10 !== undefined).map((r) => r.p10), outP90 = out.filter((r) => r.p90 !== null && r.p90 !== undefined).map((r) => r.p90);
+  const worstIn = insP10.length ? Math.min(...insP10) : null, bestOut = outP90.length ? Math.max(...outP90) : null;
+  const gap = worstIn !== null && bestOut !== null ? worstIn - bestOut : null;
+  return { rs, ins, out, insOk, outOk, worstIn, bestOut, gap, suggest: gap !== null && gap > 0 ? Math.round((worstIn + bestOut) / 2) : null };
+}
+function renderFenceSummary() {
+  const box = $("fenceSummary"); box.textContent = ""; const S = fenceStats();
+  if (!S.rs.length) return;
+  box.appendChild(el("h2", "", "Test walk result"));
+  const three = el("div", "three");
+  for (const [v, l] of [[`${S.insOk}/${S.ins.length}`, "inside spots correct"], [`${S.outOk}/${S.out.length}`, "outside spots correct"], [S.gap === null ? "–" : f0(S.gap) + " dB", "gap inside vs outside"]]) { const d = el("div"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", l)); three.appendChild(d); }
+  box.appendChild(three);
+  const wrongIn = S.out.filter((r) => !r.pass), wrongOut = S.ins.filter((r) => !r.pass);
+  const lines = [];
+  if (!S.out.length) lines.push("No outside spot tested yet. Without outside readings the entry level is only a guess. Test the corridor outside the door first.");
+  if (wrongIn.length) lines.push("Judged INSIDE but actually outside: " + wrongIn.map((r) => `${r.name} (${f0(r.median)} dBm)`).join("; ") + ".");
+  if (wrongOut.length) lines.push("Judged OUTSIDE but actually inside: " + wrongOut.map((r) => `${r.name} (${f0(r.median)} dBm)`).join("; ") + ".");
+  if (S.gap !== null && S.gap <= 0) lines.push(`The weakest inside spot (${f0(S.worstIn)} dBm at its weak end) is not stronger than the strongest outside spot (${f0(S.bestOut)} dBm). No single level separates them. Move the beacon or add a second one.`);
+  if (S.gap !== null && S.gap > 0 && S.gap < 6) lines.push(`The gap is only ${f0(S.gap)} dB. That is thin, so expect occasional errors near the edge.`);
+  if (S.suggest !== null) lines.push(`A level that separates your tested spots: ${S.suggest} dBm (midway between ${f0(S.worstIn)} and ${f0(S.bestOut)}).`);
+  if (!wrongIn.length && !wrongOut.length && S.out.length) lines.push("Every tested spot was judged correctly.");
+  for (const l of lines) box.appendChild(el("p", l.startsWith("Every") ? "" : "muted", l));
+  const acts = el("div", "row");
+  if (S.suggest !== null) { const u = el("button", "small", `Use ${S.suggest} dBm as the entry level`); u.addEventListener("click", () => { fence.enter = S.suggest; fence.exit = S.suggest - FENCE_HYST; saveFence(); renderFenceStatic(); }); acts.appendChild(u); }
+  const cp = el("button", "small", "Copy test-walk result");
+  cp.addEventListener("click", async () => { try { await navigator.clipboard.writeText(["Room 29 geofence test walk", `entry ${fence.enter} dBm, leave ${fence.exit} dBm`, ...S.rs.map((r) => `${r.name} | should be ${r.expect} | judged ${r.observed} | ${r.pass ? "OK" : "WRONG"} | typical ${f0(r.median)} | weak10 ${f0(r.p10)} | strong10 ${f0(r.p90)} | heard ${r.heard}%`), ...lines].join("\n")); cp.textContent = "Copied"; } catch (_) { cp.textContent = "Could not copy"; } setTimeout(() => { cp.textContent = "Copy test-walk result"; }, 1500); });
+  acts.appendChild(cp);
+  const clr = el("button", "small", "Clear test results"); clr.addEventListener("click", () => { if (confirm("Clear the test-walk results?")) { fence.results = []; saveFence(); renderFenceStatic(); } });
+  acts.appendChild(clr);
+  box.appendChild(acts);
+}
+const num2 = (v) => { const x = Number(String(v).replace(",", ".").replace("−", "-")); return isFinite(x) ? x : null; };
+$("fEnter").addEventListener("change", () => { const x = num2($("fEnter").value); if (x !== null && x <= -30 && x >= -100) { fence.enter = Math.round(x); if (fence.exit > fence.enter - 1) fence.exit = fence.enter - FENCE_HYST; saveFence(); } renderFenceStatic(); });
+$("fExit").addEventListener("change", () => { const x = num2($("fExit").value); if (x !== null && x <= fence.enter - 1 && x >= -105) { fence.exit = Math.round(x); saveFence(); } renderFenceStatic(); });
+$("fReset").addEventListener("click", () => { const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); });
+function addFenceSpot(expect) { const n = $("fSpotName").value.trim(); if (!n || fence.spots.some((x) => x.name === n)) return; fence.spots.push({ name: n, expect }); $("fSpotName").value = ""; saveFence(); renderFenceStatic(); }
+$("fAddOut").addEventListener("click", () => addFenceSpot("outside"));
+$("fAddIn").addEventListener("click", () => addFenceSpot("inside"));
+
 /* ---------- recorder and dock ---------- */
 function updateDock() {
   const b = state.tracked ? state.beacons.get(state.tracked) : null;
@@ -795,15 +981,16 @@ function finishRec() {
 const MODE_KEY = "ble-test-mode-v1";
 function applyMode() {
   $("circleCard").hidden = state.mode !== "circle";
+  $("fenceCard").hidden = state.mode !== "fence";
   $("recCard").hidden = state.mode !== "default";
   $("modeSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === state.mode ? "true" : "false"));
-  updateDock(); if (state.mode === "circle") renderCircleLive(smoothed());
+  updateDock(); if (state.mode === "circle") renderCircleLive(smoothed()); if (state.mode === "fence") { renderFenceStatic(); renderFenceBanner(fenceSmoothed()); }
 }
 $("modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
-  if (circ.test || state.rec) return;   // not while a recording is running
+  if (circ.test || state.rec || fence.test) return;   // not while a recording is running
   state.mode = b.dataset.v; try { localStorage.setItem(MODE_KEY, state.mode); } catch (_) {} applyMode();
 }));
-try { const m = localStorage.getItem(MODE_KEY); if (m === "circle" || m === "default") state.mode = m; } catch (_) {}
+try { const m = localStorage.getItem(MODE_KEY); if (m === "circle" || m === "default" || m === "fence") state.mode = m; } catch (_) {}
 
 /* ---------- spot chips, segmented controls ---------- */
 function buildSpots() {
@@ -923,10 +1110,11 @@ $("filter").addEventListener("input", renderList);
 $("onlyBeacons").addEventListener("change", renderList);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.scanning) acquireWake(); });
 
-loadPrefs(); loadCirc(); syncCalUi(); syncCircUi(); applyMode(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
+loadPrefs(); loadCirc(); loadFence(); syncCalUi(); syncCircUi(); applyMode(); loadResults(); buildSpots(); renderStatus(); renderDiag(); log("page opened"); renderResults(); setScanUi(); renderList();
 setInterval(renderList, 500);
 setInterval(tickRec, 200);
 setInterval(tickCircle, 250);
+setInterval(tickFence, 250);
 </script>
 </body>
 </html>
