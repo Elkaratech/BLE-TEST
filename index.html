@@ -165,6 +165,9 @@
         <div class="grow"><label class="l" for="fEnter">Entry level (dBm)</label><input id="fEnter" type="text" inputmode="decimal" autocomplete="off"></div>
         <div class="grow"><label class="l" for="fExit">Leave level (dBm)</label><input id="fExit" type="text" inputmode="decimal" autocomplete="off"></div>
       </div>
+      <div class="row" style="margin-top:8px">
+        <button id="fWider" class="small grow">Wider +1 dB</button><button id="fNarrower" class="small grow">Stricter −1 dB</button>
+      </div>
       <label class="l" style="margin-top:10px">Room 29 checking</label>
       <div class="seg" id="presetSeg" role="group" aria-label="Checking style">
         <button data-v="strict" aria-pressed="true">Strict: corridor out</button><button data-v="tolerant" aria-pressed="false">Tolerant: weak seats in</button>
@@ -363,7 +366,7 @@ const SURVEY = [
   { n: "Bottom-left", r: [-79, -79, -76, -83], set: -75 },   // typical set to -75 by the team
   { n: "Bottom-middle", r: [-72, -76, -72] }, { n: "Bottom-right", r: [-72, -64, -65, -64, -70] },
 ];
-const FENCE_TOL_DEFAULT = 6, FENCE_VER = 3, FENCE_HYST = 3, STRICT_ENTER = -68, STRICT_EXIT = -70, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
+const FENCE_TOL_DEFAULT = 6, FENCE_VER = 4, FENCE_HYST = 3, STRICT_ENTER = -70, STRICT_EXIT = -72, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
 const OUTSIDE_SURVEY = [
   { n: "Corridor, just outside the door", r: [-71, -69, -70, -72] }, { n: "Corridor, middle of the wall", r: [-80] }, { n: "Corridor, beside the door (3rd point)", r: [-74, -74, -74] },
   { n: "Next class A, bottom-right", r: [-83, -83, -81] }, { n: "Next class A, bottom-middle", r: [-83, -82, -81] }, { n: "Next class A, bottom-left", r: [-84, -85, -85] },
@@ -376,7 +379,7 @@ function surveyDefaults() {
   const enter = Math.round(worst - fence.tol);
   return { worst, worstName, enter, exit: enter - FENCE_HYST };
 }
-const fence = { preset: "strict", tol: FENCE_TOL_DEFAULT, enter: -68, exit: -70, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
+const fence = { preset: "strict", tol: FENCE_TOL_DEFAULT, enter: -70, exit: -72, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
 const defaultSpots = () => [...SURVEY.map((p) => ({ name: p.n, expect: "inside" })), ...OUTSIDE_SURVEY.map((p) => ({ name: p.n, expect: "outside" }))];
 function loadFence() {
   const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; fence.spots = defaultSpots();
@@ -860,7 +863,7 @@ function renderFenceStatic() {
   $("tolWrap").hidden = fence.preset !== "tolerant";
   const lost = SURVEY.filter((p) => surveyTyp(p) < fence.enter).map((p) => p.n);
   $("fenceWhy").textContent = fence.preset === "strict"
-    ? `Strict checking: entry level ${STRICT_ENTER} dBm, leave level ${STRICT_EXIT} dBm. The corridor outside Room 29 reads about -70 to -80, so it stays outside. The price: spots that read weaker than the entry level are judged outside. On your survey that is ${lost.length ? lost.join(", ") : "none"}. Use Tolerant to keep weak seats inside, at the cost of letting in part of the corridor.`
+    ? `Strict checking: entry level ${fence.enter} dBm, leave level ${fence.exit} dBm. The corridor outside Room 29 reads about -70 to -80, so it stays mostly outside, but the corridor by the door (about -70) is close to this level. Spots that read weaker than the entry level are judged outside. On your survey that is ${lost.length ? lost.join(", ") : "none"}. Use Wider to catch more seats, one dB at a time, and watch the check below for corridor spots turning inside.`
     : `Tolerant checking: the weakest typical spot in Room 29 is ${d.worstName} at ${f0(d.worst)} dBm. A signal up to ${fence.tol} dB weaker than that still counts as inside, so the entry level is ${d.enter} dBm and the leave level ${d.exit} dBm. This keeps weak seats inside but lets in part of the corridor. The check below shows the trade-off.`;
   const box = $("surveyBox"); box.textContent = "";
   box.appendChild(el("b", "", "Inside Room 29"));
@@ -961,6 +964,9 @@ $("fEnter").addEventListener("change", () => { const x = num2($("fEnter").value)
 $("fExit").addEventListener("change", () => { const x = num2($("fExit").value); if (x !== null && x <= fence.enter - 1 && x >= -105) { fence.exit = Math.round(x); saveFence(); } renderFenceStatic(); });
 $("presetSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { fence.preset = b.dataset.v; const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); }));
 $("tolSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { fence.tol = Number(b.dataset.v); const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); }));
+function nudgeFence(db) { const e = Math.max(-95, Math.min(-50, fence.enter + db)); const delta = e - fence.enter; fence.enter = e; fence.exit = Math.min(e - 1, fence.exit + delta); saveFence(); renderFenceStatic(); }
+$("fWider").addEventListener("click", () => nudgeFence(-1));
+$("fNarrower").addEventListener("click", () => nudgeFence(1));
 $("fReset").addEventListener("click", () => { fence.preset = "strict"; fence.tol = FENCE_TOL_DEFAULT; const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); });
 function addFenceSpot(expect) { const n = $("fSpotName").value.trim(); if (!n || fence.spots.some((x) => x.name === n)) return; fence.spots.push({ name: n, expect }); $("fSpotName").value = ""; saveFence(); renderFenceStatic(); }
 $("fAddOut").addEventListener("click", () => addFenceSpot("outside"));
