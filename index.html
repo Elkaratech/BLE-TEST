@@ -165,13 +165,19 @@
         <div class="grow"><label class="l" for="fEnter">Entry level (dBm)</label><input id="fEnter" type="text" inputmode="decimal" autocomplete="off"></div>
         <div class="grow"><label class="l" for="fExit">Leave level (dBm)</label><input id="fExit" type="text" inputmode="decimal" autocomplete="off"></div>
       </div>
-      <label class="l" style="margin-top:10px">Allowed deviation for weak signals</label>
-      <div class="seg" id="tolSeg" role="group" aria-label="Allowed deviation in dB">
-        <button data-v="5" aria-pressed="false">5 dB</button><button data-v="6" aria-pressed="true">6 dB</button><button data-v="7" aria-pressed="false">7 dB</button>
+      <label class="l" style="margin-top:10px">Room 29 checking</label>
+      <div class="seg" id="presetSeg" role="group" aria-label="Checking style">
+        <button data-v="strict" aria-pressed="true">Strict: corridor out</button><button data-v="tolerant" aria-pressed="false">Tolerant: weak seats in</button>
+      </div>
+      <div id="tolWrap" hidden>
+        <label class="l" style="margin-top:10px">Allowed deviation for weak signals</label>
+        <div class="seg" id="tolSeg" role="group" aria-label="Allowed deviation in dB">
+          <button data-v="5" aria-pressed="false">5 dB</button><button data-v="6" aria-pressed="true">6 dB</button><button data-v="7" aria-pressed="false">7 dB</button>
+        </div>
       </div>
       <p class="muted" id="fenceWhy" style="margin:8px 0"></p>
       <div id="fenceCheck" style="margin:8px 0"></div>
-      <button id="fReset" class="small">Reset to the survey values</button>
+      <button id="fReset" class="small">Reset to Strict</button>
       <details style="margin-top:10px"><summary>The survey this is built from</summary><div id="surveyBox" class="muted" style="margin-top:6px"></div></details>
       <h2 style="margin-top:16px">Test walk</h2>
       <p class="muted" style="margin-top:0">Stand at each spot, tap <b>Test</b>, and stay still for 15 seconds. The page checks whether the geofence judged it correctly. Add the outside spots you can reach.</p>
@@ -357,7 +363,7 @@ const SURVEY = [
   { n: "Bottom-left", r: [-79, -79, -76, -83], set: -75 },   // typical set to -75 by the team
   { n: "Bottom-middle", r: [-72, -76, -72] }, { n: "Bottom-right", r: [-72, -64, -65, -64, -70] },
 ];
-const FENCE_TOL_DEFAULT = 6, FENCE_VER = 2, FENCE_HYST = 3, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
+const FENCE_TOL_DEFAULT = 6, FENCE_VER = 3, FENCE_HYST = 3, STRICT_ENTER = -68, STRICT_EXIT = -70, FENCE_SMOOTH_MS = 6000, FENCE_TEST_MS = 15000, FENCE_KEY = "ble-test-fence-v1";
 const OUTSIDE_SURVEY = [
   { n: "Corridor, just outside the door", r: [-71, -69, -70, -72] }, { n: "Corridor, middle of the wall", r: [-80] }, { n: "Corridor, beside the door (3rd point)", r: [-74, -74, -74] },
   { n: "Next class A, bottom-right", r: [-83, -83, -81] }, { n: "Next class A, bottom-middle", r: [-83, -82, -81] }, { n: "Next class A, bottom-left", r: [-84, -85, -85] },
@@ -365,25 +371,29 @@ const OUTSIDE_SURVEY = [
 ];
 const surveyTyp = (p) => (p.set !== undefined ? p.set : median(p.r));
 function surveyDefaults() {
-  const typ = SURVEY.map(surveyTyp), worst = Math.min(...typ), enter = Math.round(worst - fence.tol);
-  return { worst, worstName: SURVEY[typ.indexOf(worst)].n, enter, exit: enter - FENCE_HYST };
+  const typ = SURVEY.map(surveyTyp), worst = Math.min(...typ), worstName = SURVEY[typ.indexOf(worst)].n;
+  if (fence.preset === "strict") return { worst, worstName, enter: STRICT_ENTER, exit: STRICT_EXIT };   // keeps the corridor outside; weak seats are lost
+  const enter = Math.round(worst - fence.tol);
+  return { worst, worstName, enter, exit: enter - FENCE_HYST };
 }
-const fence = { tol: FENCE_TOL_DEFAULT, enter: -81, exit: -84, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
+const fence = { preset: "strict", tol: FENCE_TOL_DEFAULT, enter: -68, exit: -70, zone: "unknown", pending: null, since: 0, spots: [], results: [], test: null };
 const defaultSpots = () => [...SURVEY.map((p) => ({ name: p.n, expect: "inside" })), ...OUTSIDE_SURVEY.map((p) => ({ name: p.n, expect: "outside" }))];
 function loadFence() {
   const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; fence.spots = defaultSpots();
   try {
     const v = JSON.parse(localStorage.getItem(FENCE_KEY) || "null");
     if (v) {
-      if (v.ver === FENCE_VER) {   // levels saved by this version; older saves are ignored so the new deviation applies
-        if ([5, 6, 7].includes(v.tol)) { fence.tol = v.tol; const d2 = surveyDefaults(); fence.enter = d2.enter; fence.exit = d2.exit; }
+      if (v.ver === FENCE_VER) {   // levels saved by this version; older saves are ignored so the strict default applies
+        if (v.preset === "strict" || v.preset === "tolerant") fence.preset = v.preset;
+        if ([5, 6, 7].includes(v.tol)) fence.tol = v.tol;
+        const d2 = surveyDefaults(); fence.enter = d2.enter; fence.exit = d2.exit;
         if (typeof v.enter === "number") fence.enter = v.enter; if (typeof v.exit === "number") fence.exit = v.exit;
       }
       if (Array.isArray(v.spots) && v.spots.length) fence.spots = v.spots; if (Array.isArray(v.results)) fence.results = v.results;
     }
   } catch (_) {}
 }
-const saveFence = () => { try { localStorage.setItem(FENCE_KEY, JSON.stringify({ ver: FENCE_VER, tol: fence.tol, enter: fence.enter, exit: fence.exit, spots: fence.spots, results: fence.results })); } catch (_) {} };
+const saveFence = () => { try { localStorage.setItem(FENCE_KEY, JSON.stringify({ ver: FENCE_VER, preset: fence.preset, tol: fence.tol, enter: fence.enter, exit: fence.exit, spots: fence.spots, results: fence.results })); } catch (_) {} };
 
 /* ---------- diagnostics ---------- */
 const logs = [];
@@ -846,7 +856,12 @@ function renderFenceStatic() {
   const d = surveyDefaults();
   $("fEnter").value = String(fence.enter); $("fExit").value = String(fence.exit);
   $("tolSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", Number(x.dataset.v) === fence.tol ? "true" : "false"));
-  $("fenceWhy").textContent = `The weakest typical spot in Room 29 is ${d.worstName} at ${f0(d.worst)} dBm. A signal up to ${fence.tol} dB weaker than that still counts as inside, so the entry level is ${d.enter} dBm. The leave level is ${FENCE_HYST} dB lower (${d.exit}), so a student at the edge does not flicker in and out. A bigger deviation keeps weak seats inside but also lets in more of the corridor. The check below shows the trade-off.`;
+  $("presetSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === fence.preset ? "true" : "false"));
+  $("tolWrap").hidden = fence.preset !== "tolerant";
+  const lost = SURVEY.filter((p) => surveyTyp(p) < fence.enter).map((p) => p.n);
+  $("fenceWhy").textContent = fence.preset === "strict"
+    ? `Strict checking: entry level ${STRICT_ENTER} dBm, leave level ${STRICT_EXIT} dBm. The corridor outside Room 29 reads about -70 to -80, so it stays outside. The price: spots that read weaker than the entry level are judged outside. On your survey that is ${lost.length ? lost.join(", ") : "none"}. Use Tolerant to keep weak seats inside, at the cost of letting in part of the corridor.`
+    : `Tolerant checking: the weakest typical spot in Room 29 is ${d.worstName} at ${f0(d.worst)} dBm. A signal up to ${fence.tol} dB weaker than that still counts as inside, so the entry level is ${d.enter} dBm and the leave level ${d.exit} dBm. This keeps weak seats inside but lets in part of the corridor. The check below shows the trade-off.`;
   const box = $("surveyBox"); box.textContent = "";
   box.appendChild(el("b", "", "Inside Room 29"));
   for (const p of SURVEY) box.appendChild(el("div", "", `${p.n}: ${p.r.join(", ")} → typical ${f0(surveyTyp(p))}${p.set !== undefined ? " (set by you)" : ""}`));
@@ -944,8 +959,9 @@ function renderFenceSummary() {
 const num2 = (v) => { const x = Number(String(v).replace(",", ".").replace("−", "-")); return isFinite(x) ? x : null; };
 $("fEnter").addEventListener("change", () => { const x = num2($("fEnter").value); if (x !== null && x <= -30 && x >= -100) { fence.enter = Math.round(x); if (fence.exit > fence.enter - 1) fence.exit = fence.enter - FENCE_HYST; saveFence(); } renderFenceStatic(); });
 $("fExit").addEventListener("change", () => { const x = num2($("fExit").value); if (x !== null && x <= fence.enter - 1 && x >= -105) { fence.exit = Math.round(x); saveFence(); } renderFenceStatic(); });
+$("presetSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { fence.preset = b.dataset.v; const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); }));
 $("tolSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { fence.tol = Number(b.dataset.v); const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); }));
-$("fReset").addEventListener("click", () => { fence.tol = FENCE_TOL_DEFAULT; const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); });
+$("fReset").addEventListener("click", () => { fence.preset = "strict"; fence.tol = FENCE_TOL_DEFAULT; const d = surveyDefaults(); fence.enter = d.enter; fence.exit = d.exit; saveFence(); renderFenceStatic(); });
 function addFenceSpot(expect) { const n = $("fSpotName").value.trim(); if (!n || fence.spots.some((x) => x.name === n)) return; fence.spots.push({ name: n, expect }); $("fSpotName").value = ""; saveFence(); renderFenceStatic(); }
 $("fAddOut").addEventListener("click", () => addFenceSpot("outside"));
 $("fAddIn").addEventListener("click", () => addFenceSpot("inside"));
