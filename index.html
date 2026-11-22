@@ -28,6 +28,7 @@
   button:active:not(:disabled) { transform:scale(.98); }
   button.primary { background:var(--primary); }
   button:disabled { opacity:.45; cursor:not-allowed; }
+  body.att .notAtt { display:none !important; }
   button.small { min-height:44px; padding:0 14px; font-size:.92rem; }
   :focus-visible { outline:3px solid var(--primary); outline-offset:2px; }
   .chip { display:inline-block; padding:2px 10px; border-radius:999px; border:1.5px solid var(--ink); background:var(--secondary); font-size:.78rem; font-weight:700; white-space:nowrap; }
@@ -103,9 +104,9 @@
   <!-- ============ LIVE ============ -->
   <div class="view" id="v-live">
     <div class="seg" id="modeSeg" role="group" aria-label="Test mode">
-      <button data-v="default" aria-pressed="true">Default</button><button data-v="circle" aria-pressed="false">Circle</button><button data-v="fence" aria-pressed="false">Geofence</button>
+      <button data-v="default" aria-pressed="true">Default</button><button data-v="circle" aria-pressed="false">Circle</button><button data-v="fence" aria-pressed="false">Geofence</button><button data-v="att" aria-pressed="false">Attendance</button>
     </div>
-    <section class="card" aria-label="Scan">
+    <section class="card notAtt" aria-label="Scan">
       <div class="row">
         <button class="primary grow" id="start">Start scan</button>
         <button class="grow" id="stop" disabled>Stop</button>
@@ -124,9 +125,9 @@
       </div>
     </section>
 
-    <section class="card tint" id="sumLive" hidden aria-label="Last scan summary"></section>
+    <section class="card tint notAtt" id="sumLive" hidden aria-label="Last scan summary"></section>
 
-    <section class="card tint meter" id="meterCard" hidden aria-label="Tracked beacon">
+    <section class="card tint meter notAtt" id="meterCard" hidden aria-label="Tracked beacon">
       <div class="row" style="justify-content:space-between">
         <span class="chip ok" id="mKind">Tracking</span>
         <span class="muted" id="mAge"></span>
@@ -194,7 +195,24 @@
       <div id="fenceSummary" style="margin-top:12px"></div>
     </section>
 
-    <section class="card" aria-label="Distance estimate settings">
+    <section class="card" id="attCard" aria-label="Attendance" hidden>
+      <h2>Attendance</h2>
+      <p class="muted" style="margin-top:0">Press the button and keep the phone with you for 30 seconds. You get one answer: Present, Absent or Flagged.</p>
+      <div class="row">
+        <button class="primary grow" id="attStart" style="min-height:64px;font-size:1.15rem">Start scan</button>
+        <button id="attCancel" class="small" hidden>Cancel</button>
+      </div>
+      <div class="bar" id="attBarBox" style="margin-top:12px" hidden aria-hidden="true"><i id="attBar"></i></div>
+      <p class="muted" id="attMsg" role="status" style="margin:8px 0 0"></p>
+      <div class="zone none" id="attResult" role="status" hidden style="margin-top:12px;font-size:2rem;padding:26px 10px"></div>
+      <details id="attDetails" hidden style="margin-top:10px"><summary>Show details</summary><div id="attDetBody" class="muted"></div></details>
+      <details style="margin-top:6px"><summary>Test without a beacon</summary>
+        <div class="row" style="margin-top:6px"><button id="attDemo" class="small">Start demo beacon</button><span class="muted" id="attDemoVal">3 m</span></div>
+        <input id="attDemoDist" type="range" min="1" max="15" value="3" step="1" style="width:100%;height:36px">
+      </details>
+    </section>
+
+    <section class="card notAtt" aria-label="Distance estimate settings">
       <details>
         <summary>Distance estimate settings</summary>
         <p class="muted">Distance is a rough estimate from signal strength: distance = 10 ^ ((A − signal) ÷ (10 × n)). Indoors it is often off by 30 to 50%, so treat it as a guide.</p>
@@ -227,7 +245,7 @@
       </details>
     </section>
 
-    <section class="card" aria-label="Beacons heard">
+    <section class="card notAtt" aria-label="Beacons heard">
       <h2>Beacons heard</h2>
       <div class="row" style="margin-bottom:8px">
         <div class="grow"><input id="filter" type="text" placeholder="Filter: name, UUID, FEAA…" autocomplete="off" aria-label="Filter beacons"></div>
@@ -1014,20 +1032,91 @@ function finishRec() {
   $("dockBar").style.width = "0";
 }
 
+/* ---------- Attendance tab: one button, 30 s, then Present, Absent or Flagged. All maths stays hidden unless "Show details" is opened. ---------- */
+const ATT_MS = 30000;
+const att = { running: false, start: 0, stopAfter: false, result: null, msg: "" };
+function attPick(since) {
+  const all = [...state.beacons.values()].filter((b) => !state.ignored.has(b.key) && b.samples.some((s) => s.t >= since));
+  if (!all.length) return null;
+  const real = all.filter((b) => b.kinds.size), pool = real.length ? real : all;
+  const cnt = (b) => b.samples.filter((s) => s.t >= since).length;
+  return pool.find((b) => b.key === state.tracked) || pool.sort((a, b) => cnt(b) - cnt(a))[0];
+}
+function attJudge(samples) {
+  const n = samples.length, secs = new Map();
+  for (const s of samples) { const k = Math.floor((s.t - att.start) / 1000); if (k >= 0 && k < 30) { if (!secs.has(k)) secs.set(k, []); secs.get(k).push(s.v); } }
+  const per = [...secs.values()].map((a) => stats(a).median), heard = per.length, cover = heard / 30;
+  const enter = fence.enter, exit = fence.exit, st = n ? stats(samples.map((s) => s.v)) : null;
+  const fracIn = heard ? per.filter((v) => v >= enter).length / heard : 0, fracOut = heard ? per.filter((v) => v < exit).length / heard : 0;
+  let verdict, why;
+  if (!n || cover < 0.25) { verdict = "absent"; why = n ? "the beacon was heard in under a quarter of the 30 seconds" : "the beacon was not heard at all"; }
+  else if (st.median >= enter && fracIn >= 0.6 && cover >= 0.5) { verdict = "present"; why = "the signal stayed at or above the entry level for most of the scan"; }
+  else if (st.median < exit && fracOut >= 0.6) { verdict = "absent"; why = "the signal stayed below the leave level for most of the scan"; }
+  else { verdict = "flagged"; why = "the signal sat on the line, jumped between inside and outside, or came and went"; }
+  return { verdict, why, n, heard, median: st ? st.median : null, fracIn, enter, exit };
+}
+function attFinish(cancelled) {
+  const since = att.start, b = attPick(since);
+  const samples = b ? b.samples.filter((s) => s.t >= since && s.t - since < ATT_MS) : [];
+  att.running = false;
+  if (att.stopAfter) { stopScan(); att.stopAfter = false; }
+  att.result = cancelled ? null : attJudge(samples);
+  att.msg = cancelled ? "Cancelled." : "";
+  renderAtt();
+}
+function renderAtt() {
+  const r = att.result, run = att.running;
+  $("attStart").disabled = run; $("attStart").textContent = r ? "Scan again" : "Start scan";
+  $("attCancel").hidden = !run; $("attBarBox").hidden = !run;
+  $("attMsg").textContent = run ? "" : att.msg;
+  const z = $("attResult"); z.hidden = !r;
+  $("attDetails").hidden = !r;
+  if (r) {
+    const label = { present: "Present", absent: "Absent", flagged: "Flagged" }[r.verdict];
+    z.className = "zone " + (r.verdict === "present" ? "inside" : r.verdict === "flagged" ? "approaching" : "none"); z.textContent = label;
+    $("attDetBody").textContent = `Reason: ${r.why}. Beacon heard in ${r.heard} of 30 seconds (${r.n} packets). Typical signal ${r.median === null ? "none" : Math.round(r.median) + " dBm"}. Seconds at or above the entry level: ${Math.round(r.fracIn * 100)}%. Levels used: entry ${r.enter}, leave ${r.exit}.`;
+  } else $("attDetails").open = false;
+}
+function tickAtt() {
+  if (!att.running) return;
+  const e = Date.now() - att.start;
+  $("attBar").style.width = Math.min(100, e / ATT_MS * 100) + "%";
+  $("attMsg").textContent = `Scanning… ${Math.max(0, Math.ceil((ATT_MS - e) / 1000))} s`;
+  if (e >= ATT_MS) attFinish(false);
+}
+$("attStart").addEventListener("click", async () => {
+  if (att.running) return;
+  att.result = null; att.msg = ""; $("attDetails").open = false; renderAtt();
+  att.stopAfter = false;
+  if (!state.scanning) {
+    if (!(bt && bt.requestLEScan)) { att.msg = "This browser cannot scan for Bluetooth. Use Chrome on Android with the flag from the Setup tab."; renderAtt(); return; }
+    await startScan();
+    if (!state.scanning) { att.msg = $("scanInfo").textContent; renderAtt(); return; }
+    att.stopAfter = true;
+  }
+  att.running = true; att.start = Date.now(); renderAtt();
+});
+$("attCancel").addEventListener("click", () => { if (att.running) attFinish(true); });
+$("attDemoDist").addEventListener("input", () => { $("attDemoVal").textContent = $("attDemoDist").value + " m"; $("demoDist").value = $("attDemoDist").value; });
+$("attDemo").addEventListener("click", () => { if (!state.scanning) { $("demoDist").value = $("attDemoDist").value; startDemo(); att.msg = "Demo beacon running. Press Start scan."; renderAtt(); } });
+setInterval(tickAtt, 250);
+
 /* ---------- test mode switch: Default test (record at spots) or Circle test ---------- */
 const MODE_KEY = "ble-test-mode-v1";
 function applyMode() {
   $("circleCard").hidden = state.mode !== "circle";
   $("fenceCard").hidden = state.mode !== "fence";
+  $("attCard").hidden = state.mode !== "att"; document.body.classList.toggle("att", state.mode === "att");
+  if (state.mode !== "att" && (att.result || att.msg)) { att.result = null; att.msg = ""; renderAtt(); }
   $("recCard").hidden = state.mode !== "default";
   $("modeSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === state.mode ? "true" : "false"));
   updateDock(); if (state.mode === "circle") renderCircleLive(smoothed()); if (state.mode === "fence") { renderFenceStatic(); renderFenceBanner(fenceSmoothed()); }
 }
 $("modeSeg").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
-  if (circ.test || state.rec || fence.test) return;   // not while a recording is running
+  if (circ.test || state.rec || fence.test || att.running) return;   // not while a recording is running
   state.mode = b.dataset.v; try { localStorage.setItem(MODE_KEY, state.mode); } catch (_) {} applyMode();
 }));
-try { const m = localStorage.getItem(MODE_KEY); if (m === "circle" || m === "default" || m === "fence") state.mode = m; } catch (_) {}
+try { const m = localStorage.getItem(MODE_KEY); if (m === "circle" || m === "default" || m === "fence" || m === "att") state.mode = m; } catch (_) {}
 
 /* ---------- spot chips, segmented controls ---------- */
 function buildSpots() {
